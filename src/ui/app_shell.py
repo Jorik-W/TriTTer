@@ -116,12 +116,14 @@ class TriTTerWindow(QMainWindow):
         # --- Analyse tab ---
         self.analyze_gui = GUIInterface(app)
         self.analyze_gui.windEffectChanged.connect(self._on_analyze_wef_changed)
+        self.analyze_gui.weatherApiApplyChanged.connect(self._on_analyze_weather_api_apply_changed)
         self._analyse_page = self._build_analyze_page()
         self.tabs.addTab(self._analyse_page, "Analyse")
 
         # --- Plan tab ---
         self.plan_gui = PlanTab()
         self.plan_gui.windEffectChanged.connect(self._on_plan_wef_changed)
+        self.plan_gui.weatherApplyChanged.connect(self._on_plan_apply_weather_changed)
         self._plan_page = self._build_plan_page()
         self.tabs.addTab(self._plan_page, "Plan")
 
@@ -217,7 +219,23 @@ class TriTTerWindow(QMainWindow):
         if caps.analyse_ok:
             self.tabs.setTabEnabled(analyse_idx, True)
             try:
-                self.analyze_gui.load_file(path)
+                use_open_elev = self.open_file_tab.load_open_elevation_on_file_load
+                use_open_meteo = self.open_file_tab.load_open_meteo_on_file_load
+                self.open_file_tab.append_log(
+                    "Analyse elevation API on load: "
+                    f"Open-Elevation={'ON' if use_open_elev else 'OFF'}, "
+                    f"Open-Meteo={'ON' if use_open_meteo else 'OFF'}"
+                )
+                if use_open_elev:
+                    self.open_file_tab.append_log("Analyse: Open-Elevation fetch requested")
+                if use_open_meteo:
+                    self.open_file_tab.append_log("Analyse: Open-Meteo elevation fetch requested")
+                if not use_open_elev and not use_open_meteo:
+                    self.open_file_tab.append_log("Analyse: elevation API fetch skipped (both OFF)")
+
+                self.analyze_gui.load_open_elevation_on_file_load = use_open_elev
+                self.analyze_gui.load_open_meteo_on_file_load = use_open_meteo
+                self.analyze_gui.load_file(path, status_callback=self.open_file_tab.append_log)
             except Exception:
                 pass
         else:
@@ -307,21 +325,21 @@ class TriTTerWindow(QMainWindow):
                 timestamps, start_time, mode)
             return
 
-        if cfg.get("applies_analyse", True):
-            try:
-                self.analyze_gui.apply_weather_from_tab(cfg)
-            except Exception:
-                pass
-            if self.tabs.currentIndex() != self.tabs.indexOf(self._analyse_page):
-                self._analyse_stale = True
-        if cfg.get("applies_plan", True):
-            plan_visible = (self.tabs.currentIndex() == self.tabs.indexOf(self._plan_page))
-            try:
-                self.plan_gui.apply_weather_from_tab(cfg, recalc=plan_visible)
-            except Exception:
-                pass
-            if not plan_visible:
-                self._plan_stale = True
+        analyse_visible = (self.tabs.currentIndex() == self.tabs.indexOf(self._analyse_page))
+        try:
+            self.analyze_gui.apply_weather_from_tab(cfg)
+        except Exception:
+            pass
+        if not analyse_visible:
+            self._analyse_stale = True
+
+        plan_visible = (self.tabs.currentIndex() == self.tabs.indexOf(self._plan_page))
+        try:
+            self.plan_gui.apply_weather_from_tab(cfg, recalc=plan_visible)
+        except Exception:
+            pass
+        if not plan_visible:
+            self._plan_stale = True
 
     def _run_weather_fetch(self, distances, latitudes, longitudes, timestamps, start_time, mode):
         """Start a background multi-point weather fetch and wire result back to weather_tab."""
@@ -365,6 +383,22 @@ class TriTTerWindow(QMainWindow):
         """Plan WEF slider released — push to weather tab + analyse."""
         try:
             self.weather_tab.s_wef.set_value(value, silent=False)
+        except Exception:
+            pass
+
+    def _on_plan_apply_weather_changed(self, checked: bool):
+        """Plan Apply weather toggle changed — sync canonical Weather tab checkbox."""
+        try:
+            if self.weather_tab.cb_plan.isChecked() != bool(checked):
+                self.weather_tab.cb_plan.setChecked(bool(checked))
+        except Exception:
+            pass
+
+    def _on_analyze_weather_api_apply_changed(self, checked: bool):
+        """Analyze use API toggle changed — sync canonical Weather tab checkbox."""
+        try:
+            if self.weather_tab.cb_analyse.isChecked() != bool(checked):
+                self.weather_tab.cb_analyse.setChecked(bool(checked))
         except Exception:
             pass
 

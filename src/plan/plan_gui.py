@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QInputDialog, QGroupBox, QGridLayout,
     QFrame, QScrollArea, QSplitter, QTabWidget, QGraphicsOpacityEffect,
-    QSizePolicy
+    QSizePolicy, QCheckBox
 )
 from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QFontDatabase
@@ -337,6 +337,7 @@ class AdbSendWorker(QObject):
 
 class BikeEstimator(QMainWindow):
     windEffectChanged = pyqtSignal(float)
+    weatherApplyChanged = pyqtSignal(bool)
 
     def __init__(self):
         super().__init__()
@@ -365,6 +366,7 @@ class BikeEstimator(QMainWindow):
         self._adb_request_id = 0
         self._weather_wef = 0.40   # wind effect factor, updated by WeatherTab via shell
         self._last_weather_cfg: dict = {}  # last config pushed from shared WeatherTab
+        self._syncing_plan_apply_weather = False
         self._course_natural_count = None  # natural section count for current course
         self._debounce_timer = QTimer()
         self._debounce_timer.setSingleShot(True)
@@ -469,6 +471,18 @@ class BikeEstimator(QMainWindow):
         self.s_target_segs.valueChanged.connect(self._on_target_segs_changed)
         self.s_wef.interactionFinished.connect(
             lambda: self.windEffectChanged.emit(self.s_wef.value()))
+
+        apply_row = QHBoxLayout()
+        apply_row.setSpacing(10)
+        apply_lbl = QLabel("Apply weather")
+        apply_lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        self.cb_apply_weather = QCheckBox("Plan")
+        self.cb_apply_weather.setChecked(True)
+        self.cb_apply_weather.toggled.connect(self._on_apply_weather_toggled)
+        apply_row.addWidget(apply_lbl)
+        apply_row.addWidget(self.cb_apply_weather)
+        apply_row.addStretch()
+        settings_layout.addLayout(apply_row)
 
         # ── Ghost sliders: course (set by Open File tab / file load) ─────
         self.s_dist  = SliderRow("Distance",          0,   350, 180, 0.5, 1, " km")
@@ -1170,6 +1184,18 @@ class BikeEstimator(QMainWindow):
         # Only triggered by hidden AdvancedInputPanel; no-op now that
         # shared WeatherTab drives plan weather via apply_weather_from_tab().
 
+    def _set_apply_weather_checkbox(self, checked: bool):
+        if not hasattr(self, 'cb_apply_weather'):
+            return
+        old = self.cb_apply_weather.blockSignals(True)
+        self.cb_apply_weather.setChecked(bool(checked))
+        self.cb_apply_weather.blockSignals(old)
+
+    def _on_apply_weather_toggled(self, checked: bool):
+        if self._syncing_plan_apply_weather:
+            return
+        self.weatherApplyChanged.emit(bool(checked))
+
     def apply_weather_from_tab(self, cfg: dict, recalc=True):
         """Apply weather settings from the shared WeatherTab to plan calculations.
 
@@ -1177,7 +1203,18 @@ class BikeEstimator(QMainWindow):
         Also called from _on_course_loaded to re-apply the last stored config.
         """
         self._last_weather_cfg = dict(cfg)
-        if not cfg.get('applies_plan', True):
+        applies_plan = bool(cfg.get('applies_plan', True))
+        self._syncing_plan_apply_weather = True
+        try:
+            self._set_apply_weather_checkbox(applies_plan)
+        finally:
+            self._syncing_plan_apply_weather = False
+
+        if not applies_plan:
+            self._clear_rho_cache()
+            self.advanced_input.set_weather_status("Weather disabled for Plan", color=MUTED)
+            if recalc:
+                self._recalculate()
             return
 
         self._weather_wef = float(cfg.get('wind_effect_factor', 0.40))
@@ -1209,139 +1246,24 @@ class BikeEstimator(QMainWindow):
                     self._apply_weather_samples(api_result['weather_samples'])
                 if recalc:
                     self._recalculate()
-            elif self.fit_data is not None and self.fit_data.get('valid'):
-                self._trigger_weather_fetch_tab(cfg)
             else:
+                self._clear_rho_cache()
+                self.advanced_input.set_weather_status(
+                    "Weather API selected. Fetch weather in Weather tab.", color=ORANGE
+                )
                 if recalc:
                     self._recalculate()
 
     def _trigger_weather_fetch_tab(self, tab_cfg: dict):
-        """Start an API weather fetch driven by the shared WeatherTab config."""
-        import datetime as _dt
-        lats = self.fit_data.get('latitudes')
-        lons = self.fit_data.get('longitudes')
-        has_gps = (lats is not None and lons is not None
-                   and len(lats) > 0 and len(lons) > 0)
-        if not has_gps:
-            self._clear_rho_cache()
-            self._recalculate()
-            return
-
-        time_mode = tab_cfg.get('api_time_mode', 'file')
-        start_time = None
-        if time_mode == 'manual':
-            qdt = tab_cfg.get('api_datetime')
-            if qdt is not None:
-                start_time = _dt.datetime(
-                    qdt.date().year(), qdt.date().month(), qdt.date().day(),
-                    qdt.time().hour(), qdt.time().minute(),
-                )
-        # 'file' mode fallback: forecast requires a start_time; use now.
-        if start_time is None:
-            start_time = _dt.datetime.now()
-
-        config = {
-            'mode': MODE_FORECAST,
-            'start_time': start_time,
-            'enabled': True,
-            'use_api': True,
-        }
-        geometry = {
-            'distances': self.fit_data['distances'],
-            'latitudes': lats,
-            'longitudes': lons,
-            'grades': self.fit_data['grades'],
-            'timestamps': self.fit_data.get('timestamps'),
-        }
-        p = self._get_params()
-        adv = self.advanced_input.get_params()
-        seed_params = {
-            'power_w': p['avg_power'],  # ftp × if_target from Settings sliders
-            'cda': p['cda'],
-            'mass': p['mass_kg'],
-            'crr': p['crr'],
-            'eff': p['drivetrain_eff'],
-        }
-        self._weather_request_id += 1
-        request_id = self._weather_request_id
-        thread = QThread(self)
-        worker = WeatherFetchWorker(request_id, geometry, config, seed_params)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(self._on_weather_fetched)
-        worker.failed.connect(self._on_weather_failed)
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        worker.failed.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda rid=request_id: self._weather_threads.pop(rid, None))
-        self._weather_threads[request_id] = (thread, worker)
-        thread.start()
+        """Deprecated: weather fetch is only allowed from Weather tab."""
+        self.advanced_input.set_weather_status(
+            "Fetch weather in Weather tab.", color=ORANGE
+        )
 
     def _trigger_weather_fetch(self):
-        if not self.fit_data or not self.fit_data.get('valid'):
-            return
-
-        config = self.advanced_input.get_weather_config()
-
-        # Manual conditions: apply rho/wind directly, no network fetch.
-        if not config.get('use_api'):
-            self._apply_manual_conditions(config)
-            ws_kmh = config['wind_speed_ms'] * 3.6
-            self.advanced_input.set_weather_status(
-                f"Manual: \u03c1={config['rho']:.3f} kg/m\u00b3, "
-                f"wind {ws_kmh:.1f} km/h @ {config['wind_from_deg']:.0f}\u00b0",
-                color=GREEN,
-            )
-            self._recalculate_advanced(self._get_params())
-            return
-
-        lats = self.fit_data.get('latitudes')
-        lons = self.fit_data.get('longitudes')
-        has_gps = (
-            config.get('enabled')
-            and lats is not None and lons is not None
-            and len(lats) > 0 and len(lons) > 0
+        self.advanced_input.set_weather_status(
+            "Fetch weather in Weather tab.", color=ORANGE
         )
-        if not has_gps:
-            self._clear_rho_cache()
-            return
-
-        geometry = {
-            'distances': self.fit_data['distances'],
-            'latitudes': lats,
-            'longitudes': lons,
-            'grades': self.fit_data['grades'],
-            'timestamps': self.fit_data.get('timestamps'),
-        }
-        p = self._get_params()
-        adv = self.advanced_input.get_params()
-        seed_params = {
-            'power_w': p['avg_power'],  # ftp × if_target from Settings sliders
-            'cda': p['cda'],
-            'mass': p['mass_kg'],
-            'crr': p['crr'],
-            'eff': p['drivetrain_eff'],
-        }
-
-        self.advanced_input.set_weather_status("Fetching weather\u2026")
-        self._weather_request_id += 1
-        request_id = self._weather_request_id
-        thread = QThread(self)
-        worker = WeatherFetchWorker(request_id, geometry, config, seed_params)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(self._on_weather_fetched)
-        worker.failed.connect(self._on_weather_failed)
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        worker.failed.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda rid=request_id: self._weather_threads.pop(rid, None))
-        self._weather_threads[request_id] = (thread, worker)
-        thread.start()
 
     def _on_weather_fetched(self, request_id, samples, summary):
         if request_id != self._weather_request_id:
@@ -1565,7 +1487,6 @@ PlanTab = BikeEstimator
 
 def main():
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
-    QCoreApplication.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
     app = QApplication(sys.argv)
     app.setApplicationName("Bike Loop Time Estimator")
 

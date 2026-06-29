@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QPlainTextEdit, QGroupBox, QSizePolicy, QSpacerItem
+    QFileDialog, QPlainTextEdit, QGroupBox, QSizePolicy, QSpacerItem, QCheckBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -52,6 +52,18 @@ class OpenFileTab(QWidget):
     def load_path(self, path: str):
         """Programmatically load a file (also used by drag-drop or shell)."""
         self._do_load(path)
+
+    def append_log(self, msg: str):
+        """Append a line to the Open File log textbox."""
+        self._append_log(msg)
+
+    @property
+    def load_open_elevation_on_file_load(self) -> bool:
+        return bool(self.cb_load_open_elevation.isChecked())
+
+    @property
+    def load_open_meteo_on_file_load(self) -> bool:
+        return bool(self.cb_load_open_meteo.isChecked())
 
     # ------------------------------------------------------------------
     # UI
@@ -93,6 +105,28 @@ class OpenFileTab(QWidget):
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
         layout.addWidget(self.status_label)
+
+        # ── Analyse load options (elevation API calls) ───────────────
+        self.load_options_box = QGroupBox("Analyse load options")
+        load_opts_layout = QVBoxLayout(self.load_options_box)
+        load_opts_layout.setContentsMargins(8, 8, 8, 8)
+        load_opts_layout.setSpacing(4)
+
+        self.cb_load_open_elevation = QCheckBox("Call Open-Elevation API on file load")
+        self.cb_load_open_elevation.setChecked(False)
+        self.cb_load_open_meteo = QCheckBox("Call Open-Meteo Elevation API on file load")
+        self.cb_load_open_meteo.setChecked(False)
+
+        self.cb_load_open_elevation.setToolTip(
+            "Fetch elevation from Open-Elevation when loading a file into Analyse"
+        )
+        self.cb_load_open_meteo.setToolTip(
+            "Fetch elevation from Open-Meteo when loading a file into Analyse"
+        )
+
+        load_opts_layout.addWidget(self.cb_load_open_elevation)
+        load_opts_layout.addWidget(self.cb_load_open_meteo)
+        layout.addWidget(self.load_options_box)
 
         # ── File info cards ───────────────────────────────────────────
         self.info_box = QGroupBox("File info")

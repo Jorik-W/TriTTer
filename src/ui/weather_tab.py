@@ -67,6 +67,9 @@ class WeatherTab(QWidget):
             "applies_analyse": self.cb_analyse.isChecked(),
             "applies_plan":    self.cb_plan.isChecked(),
             "wind_effect_factor": self.s_wef.value(),
+            "api_ready": bool(
+                self._last_fetch_result and self._last_fetch_result.get("weather_samples")
+            ),
         }
         if cfg["source"] == "manual":
             cfg.update({
@@ -194,19 +197,12 @@ class WeatherTab(QWidget):
         self._no_file_warning.setVisible(False)  # hidden at startup (Manual is default)
         ab_layout.addWidget(self._no_file_warning)
 
-        dt_row = QHBoxLayout()
-        dt_row.setSpacing(12)
-        dt_spacer = QLabel()
-        dt_spacer.setFixedWidth(90)
-        dt_row.addWidget(dt_spacer)
         self.dt_pick = QDateTimeEdit(QDateTime.currentDateTime())
         self.dt_pick.setDisplayFormat("yyyy-MM-dd  HH:mm")
         self.dt_pick.setCalendarPopup(True)
         apply_calendar_style(self.dt_pick.calendarWidget())
         self.dt_pick.setEnabled(True)   # manual is default, so start enabled
-        dt_row.addWidget(self.dt_pick)
-        dt_row.addStretch()
-        ab_layout.addLayout(dt_row)
+        time_row.insertWidget(1, self.dt_pick)
 
         fetch_row = QHBoxLayout()
         self.fetch_btn = QPushButton("Fetch weather")

@@ -354,6 +354,7 @@ def resource_path(relative_path):
 
 class GUIInterface(QMainWindow):
     windEffectChanged = pyqtSignal(float)   # emitted when user changes WEF slider
+    weatherApiApplyChanged = pyqtSignal(bool)  # emitted when Analyze use_weather_api is toggled
 
     def __init__(self, app):
         super().__init__()
@@ -369,16 +370,20 @@ class GUIInterface(QMainWindow):
         self.analysis_results = None
         self.preprocessed_segments = None
         self.segment_data_map = {}
+        self._elevation_api_reply = {}
         self.current_figure = None
         self.current_canvas = None
         self.worker = None
         self._map_html_path = None
         self.load_weather_api_on_file_load = True
-        self.load_open_elevation_on_file_load = True
+        self.load_open_elevation_on_file_load = False
         self.load_open_meteo_on_file_load = False
         self.weather_api_loaded = False
         self.elevation_api_loaded = False
         self.preloaded_weather_samples = []
+        self._weather_tab_source = 'api'
+        self._weather_tab_applies_analyse = True
+        self._weather_tab_api_ready = False
 
         self.home_directory = os.path.expanduser('~')
         self.downloads_path = os.path.join(self.home_directory, 'Downloads')
@@ -413,7 +418,7 @@ class GUIInterface(QMainWindow):
         self.load_weather_api_checkbox = QCheckBox()
         self.load_weather_api_checkbox.setChecked(True)
         self.load_open_elevation_checkbox = QCheckBox()
-        self.load_open_elevation_checkbox.setChecked(True)
+        self.load_open_elevation_checkbox.setChecked(False)
         self.load_open_meteo_checkbox = QCheckBox()
         self.load_open_meteo_checkbox.setChecked(False)
 
@@ -445,11 +450,6 @@ class GUIInterface(QMainWindow):
         self.analysis_status.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
         top_bar.addWidget(self.analysis_status)
 
-        about_btn = QPushButton("?")
-        about_btn.setFixedSize(25, 25)
-        about_btn.setToolTip("About this program")
-        about_btn.clicked.connect(self._show_about_dialog)
-        top_bar.addWidget(about_btn)
         layout.addLayout(top_bar)
 
         # ── Collapsible Advanced settings strip ───────────────────────────
@@ -556,11 +556,14 @@ class GUIInterface(QMainWindow):
             for key in bool_keys:
                 row = QHBoxLayout()
                 row.setContentsMargins(0, 2, 0, 2)
-                lbl = QLabel(key.replace('_', ' ').title())
+                label_text = "Apply weather" if key == 'use_weather_api' else key.replace('_', ' ').title()
+                lbl = QLabel(label_text)
                 lbl.setFixedWidth(200)
                 cb = QCheckBox()
                 cb.setChecked(bool(self.parameters[key]))
                 self.param_checkboxes[key] = cb
+                if key == 'use_weather_api':
+                    cb.toggled.connect(self._on_use_weather_api_toggled)
                 row.addWidget(lbl)
                 row.addWidget(cb)
                 row.addStretch()
@@ -603,6 +606,10 @@ class GUIInterface(QMainWindow):
         self._adv_widget.setVisible(checked)
         self._adv_toggle.setText(
             "▼  Advanced settings" if checked else "▶  Advanced settings")
+
+    def _on_use_weather_api_toggled(self, checked: bool):
+        """Propagate Analyze weather API toggle back to shared Weather tab state."""
+        self.weatherApiApplyChanged.emit(bool(checked))
 
     # ---- Result sub-tabs ------------------------------------------------
     def _build_summary_tab(self):
@@ -748,7 +755,7 @@ class GUIInterface(QMainWindow):
         plot_layout.addWidget(self.plot_button)
         self.results_notebook.addTab(self.plot_frame, "Plots")
 
-    def load_file(self, path: str):
+    def load_file(self, path: str, status_callback=None):
         """Load a file into the Analyse pipeline (called from the Open File tab).
 
         Sets ``self.fit_file_path`` and triggers the internal FIT load sequence,
@@ -760,7 +767,7 @@ class GUIInterface(QMainWindow):
         from pathlib import Path as _Path
         if hasattr(self, "file_label"):
             self.file_label.setText(_Path(path).name)
-        self._load_fit_file()
+        self._load_fit_file(status_callback=status_callback)
 
     def apply_rider(self, rider):
         """Apply a selected rider profile's parameters to the Analyze form.
@@ -820,7 +827,42 @@ class GUIInterface(QMainWindow):
         wef = float(cfg.get('wind_effect_factor', 0.40))
         self.update_parameters({'wind_effect_factor': wef})
 
-        source = cfg.get('source', 'manual')
+        source = str(cfg.get('source', 'manual'))
+        applies_analyse = bool(cfg.get('applies_analyse', True))
+        api_result = cfg.get('api_result')
+        api_ready = bool(cfg.get('api_ready')) or bool(
+            api_result and api_result.get('weather_samples')
+        )
+
+        self._weather_tab_source = source
+        self._weather_tab_applies_analyse = applies_analyse
+        self._weather_tab_api_ready = api_ready
+        self.weather_api_loaded = api_ready
+
+        def _set_use_weather_api(enabled: bool):
+            enabled = bool(enabled)
+            self.parameters['use_weather_api'] = enabled
+            try:
+                self.analyzer.update_parameters({'use_weather_api': enabled})
+            except Exception:
+                pass
+            key = 'use_weather_api'
+            if key in self.param_checkboxes:
+                checkbox = self.param_checkboxes[key]
+                old = checkbox.blockSignals(True)
+                checkbox.setChecked(enabled)
+                checkbox.blockSignals(old)
+
+        if not applies_analyse:
+            self.preloaded_weather_samples = []
+            try:
+                self.analyzer.preloaded_weather_samples = []
+            except Exception:
+                pass
+            _set_use_weather_api(False)
+            self._sync_api_parameter_checkbox_state()
+            return
+
         if source == 'manual':
             t  = float(cfg.get('temperature_c',      15.0))
             p  = float(cfg.get('pressure_hpa',       1013.25))
@@ -840,9 +882,9 @@ class GUIInterface(QMainWindow):
                 self.analyzer.preloaded_weather_samples = [manual_sample]
             except Exception:
                 pass
+            _set_use_weather_api(False)
         elif source == 'api':
-            api_result = cfg.get('api_result')
-            if api_result and api_result.get('weather_samples'):
+            if api_ready:
                 # Convert fetch_weather_samples format → analyzer preloaded format.
                 # fetch: {distance, latitude, longitude, when, weather:{...}}
                 # analyzer: {distance, timestamp, weather_data:{...}}
@@ -864,7 +906,16 @@ class GUIInterface(QMainWindow):
                     self.analyzer.preloaded_weather_samples = analyze_samples
                 except Exception:
                     pass
-            # else: leave preloaded_weather_samples as-is (from file load).
+                _set_use_weather_api(True)
+            else:
+                self.preloaded_weather_samples = []
+                try:
+                    self.analyzer.preloaded_weather_samples = []
+                except Exception:
+                    pass
+                _set_use_weather_api(False)
+
+        self._sync_api_parameter_checkbox_state()
 
     def _show_about_dialog(self):
         dialog = QDialog(self, flags=Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
@@ -948,7 +999,7 @@ class GUIInterface(QMainWindow):
             self.file_label.setText(Path(path).name)
             self._load_fit_file()
 
-    def _load_fit_file(self):
+    def _load_fit_file(self, status_callback=None):
         if not self.fit_file_path:
             QMessageBox.critical(self, "Error", "Please select a FIT file first")
             return
@@ -959,29 +1010,43 @@ class GUIInterface(QMainWindow):
                 "Wait for the current analysis to finish before loading a new FIT file."
             )
             return
+
+        def _log(msg):
+            self.file_status.append(msg)
+            if status_callback:
+                status_callback(msg)
+
         try:
             _mark_stage("ui:load_fit:start")
             self.file_status.clear()
-            self.file_status.append("Loading FIT file...\n")
+            _log("Loading FIT file...\n")
             QApplication.processEvents()
 
             # Save current parameters from UI (including checkbox state) BEFORE loading
+            # Capture elevation flags BEFORE _save_parameters overwrites them from internal checkboxes.
+            call_open_elevation_on_load = bool(getattr(self, 'load_open_elevation_on_file_load', False))
+            call_open_meteo_on_load = bool(getattr(self, 'load_open_meteo_on_file_load', False))
             self._save_parameters()
 
             # Hard reset all previous data so reload starts from a clean state.
             uncleared = self._clear_all_loaded_data_for_reload()
             if uncleared:
-                self.file_status.append(
-                    "Reload cleanup warning: not cleared -> " + ", ".join(uncleared) + "\n"
-                )
+                _log("Reload cleanup warning: not cleared -> " + ", ".join(uncleared) + "\n")
             else:
-                self.file_status.append(
-                    "Reload cleanup: all previous segment/power/speed/FIT/elevation/weather data cleared\n"
-                )
+                _log("Reload cleanup: all previous segment/power/speed/FIT/elevation/weather data cleared\n")
 
-            use_weather_api_on_load = bool(self.load_weather_api_checkbox.isChecked())
-            call_open_elevation_on_load = bool(self.load_open_elevation_checkbox.isChecked())
-            call_open_meteo_on_load = bool(self.load_open_meteo_checkbox.isChecked())
+            _log(
+                f"Elevation API flags: Open-Elevation={'ON' if call_open_elevation_on_load else 'OFF'}, "
+                f"Open-Meteo={'ON' if call_open_meteo_on_load else 'OFF'}\n"
+            )
+            if hasattr(self, 'load_open_elevation_checkbox'):
+                old = self.load_open_elevation_checkbox.blockSignals(True)
+                self.load_open_elevation_checkbox.setChecked(call_open_elevation_on_load)
+                self.load_open_elevation_checkbox.blockSignals(old)
+            if hasattr(self, 'load_open_meteo_checkbox'):
+                old = self.load_open_meteo_checkbox.blockSignals(True)
+                self.load_open_meteo_checkbox.setChecked(call_open_meteo_on_load)
+                self.load_open_meteo_checkbox.blockSignals(old)
 
             self.weather_api_loaded = False
             self.elevation_api_loaded = False
@@ -990,8 +1055,9 @@ class GUIInterface(QMainWindow):
             fit_parser = FITParser()
             self.ride_data = fit_parser.parse_fit_file(
                 self.fit_file_path,
-                status_callback=lambda msg: self.file_status.append(msg),
+                status_callback=_log,
             )
+            _log(f"FIT parsed: {len(self.ride_data)} rows, columns={list(self.ride_data.columns[:8])}\n")
 
             # Always preserve FIT altitude source columns
             if 'altitude_fit' in self.ride_data.columns:
@@ -1001,20 +1067,24 @@ class GUIInterface(QMainWindow):
 
             # Startup fetches can include multiple elevation APIs
             if call_open_elevation_on_load:
-                self.file_status.append("Calling Open-Elevation API on file load...")
+                _log("Calling Open-Elevation API on file load...\n")
                 self._fetch_store_elevation_source(
                     service=ElevationService(),
                     source_key='open_elevation',
-                    status_callback=lambda msg: self.file_status.append(msg),
+                    status_callback=_log,
                 )
+            else:
+                _log("Open-Elevation: skipped (OFF)\n")
 
             if call_open_meteo_on_load:
-                self.file_status.append("Calling Open-Meteo Elevation API on file load...")
+                _log("Calling Open-Meteo Elevation API on file load...\n")
                 self._fetch_store_elevation_source(
                     service=OpenMeteoElevationService(),
                     source_key='open_meteo',
-                    status_callback=lambda msg: self.file_status.append(msg),
+                    status_callback=_log,
                 )
+            else:
+                _log("Open-Meteo: skipped (OFF)\n")
 
             # Determine if at least one API source was fetched
             has_open_elevation = 'altitude_open_elevation' in self.ride_data.columns and self.ride_data['altitude_open_elevation'].notna().any()
@@ -1024,24 +1094,35 @@ class GUIInterface(QMainWindow):
             # Ensure source-specific slope columns exist
             self._ensure_source_slopes()
 
+            oe_n = int(self.ride_data['altitude_open_elevation'].notna().sum()) if 'altitude_open_elevation' in self.ride_data.columns else 0
+            om_n = int(self.ride_data['altitude_open_meteo'].notna().sum()) if 'altitude_open_meteo' in self.ride_data.columns else 0
+            fit_n = int(self.ride_data['altitude_fit'].notna().sum()) if 'altitude_fit' in self.ride_data.columns else 0
+
             elev_source = 'FIT file'
             
-            self.file_status.append(f"Successfully loaded {len(self.ride_data)} data points\n")
-            self.file_status.append(
+            _log(f"Successfully loaded {len(self.ride_data)} data points\n")
+            _log(
                 "Elevation load summary: "
-                f"Open-Elevation={'yes' if has_open_elevation else 'no'}, "
-                f"Open-Meteo={'yes' if has_open_meteo else 'no'}, FIT=yes\n"
+                f"Open-Elevation={oe_n} pts ({'yes' if has_open_elevation else 'no'}), "
+                f"Open-Meteo={om_n} pts ({'yes' if has_open_meteo else 'no'}), "
+                f"FIT={fit_n} pts\n"
             )
 
-            if use_weather_api_on_load:
-                self._prefetch_weather_api_on_load()
-            else:
-                self.file_status.append("Weather API on load: disabled\n")
+            # Detail from _elevation_api_reply
+            for key in ('open_elevation', 'open_meteo'):
+                reply = self._elevation_api_reply.get(key)
+                if reply:
+                    _log(
+                        f"  {key}: points={reply['points']}, "
+                        f"source={reply['source']}, has_api={reply['has_altitude_api']}\n"
+                    )
+
+            _log("Weather API on load: disabled (use Weather tab Fetch weather)\n")
 
             cols = ', '.join(self.ride_data.columns[:10])
-            self.file_status.append(f"Columns: {cols}\n")
+            _log(f"Columns: {cols}\n")
             if len(self.ride_data.columns) > 10:
-                self.file_status.append(f"... and {len(self.ride_data.columns) - 10} more\n")
+                _log(f"... and {len(self.ride_data.columns) - 10} more\n")
 
             self.analyzer = CDAAnalyzer(self.parameters)
             self.analyzer.elevation_source = elev_source
@@ -1056,7 +1137,7 @@ class GUIInterface(QMainWindow):
             _mark_stage("ui:load_fit:done")
         except Exception as e:
             _mark_stage("ui:load_fit:exception")
-            self.file_status.append(f"Error loading FIT file: {str(e)}\n")
+            _log(f"Error loading FIT file: {str(e)}\n")
             QMessageBox.critical(self, "Error", str(e))
 
     def _can_load_new_file(self):
@@ -1105,7 +1186,7 @@ class GUIInterface(QMainWindow):
         if self.ride_data is None:
             return
 
-        df_source, _ = service.apply_to_dataframe(
+        df_source, source_desc = service.apply_to_dataframe(
             self.ride_data.copy(),
             status_callback=status_callback,
         )
@@ -1116,6 +1197,26 @@ class GUIInterface(QMainWindow):
 
             # Keep legacy field pointing to last fetched API for backward compatibility
             self.ride_data['altitude_api'] = df_source['altitude_api']
+            if status_callback:
+                non_null = int(df_source['altitude_api'].notna().sum())
+                status_callback(
+                    f"{source_key}: received altitude_api points={non_null} ({source_desc})"
+                )
+            self._elevation_api_reply[source_key] = {
+                'points': int(df_source['altitude_api'].notna().sum()),
+                'source': str(source_desc),
+                'has_altitude_api': True,
+            }
+        else:
+            if status_callback:
+                status_callback(
+                    f"{source_key}: no altitude_api returned ({source_desc})"
+                )
+            self._elevation_api_reply[source_key] = {
+                'points': 0,
+                'source': str(source_desc),
+                'has_altitude_api': False,
+            }
 
     def _clear_all_loaded_data_for_reload(self):
         """Clear all cached ride, segment, analysis, and API-derived state.
@@ -1213,15 +1314,23 @@ class GUIInterface(QMainWindow):
             QMessageBox.critical(self, "Error", f"Error saving parameters: {str(e)}")
 
     def _sync_api_parameter_checkbox_state(self):
-        """Sync parameter controls based on what data was loaded at file start."""
+        """Sync weather/elevation controls based on shared Weather tab state."""
         weather_key = 'use_weather_api'
         if weather_key in self.param_checkboxes:
             checkbox = self.param_checkboxes[weather_key]
-            checkbox.setEnabled(True)
-            if self.weather_api_loaded:
-                checkbox.setToolTip("Weather API data fetched at file load and available")
+            applies = bool(getattr(self, '_weather_tab_applies_analyse', True))
+            source = str(getattr(self, '_weather_tab_source', 'manual'))
+            api_ready = bool(getattr(self, '_weather_tab_api_ready', False))
+            checkbox.setEnabled(source == 'api' and api_ready)
+            if source != 'api':
+                checkbox.setToolTip("Disabled: Weather source is Manual")
+            elif api_ready:
+                if applies:
+                    checkbox.setToolTip("Enabled: weather fetched in Weather tab")
+                else:
+                    checkbox.setToolTip("Enabled: turn on to apply fetched API weather to Analyse")
             else:
-                checkbox.setToolTip("No weather API data fetched at file load; calculation falls back to no wind")
+                checkbox.setToolTip("Disabled: fetch weather first in Weather tab")
 
         # Enable/disable analysis elevation source radios based on available loaded columns
         if hasattr(self, 'analysis_open_elevation_radio') and self.ride_data is not None:
@@ -1270,30 +1379,10 @@ class GUIInterface(QMainWindow):
                 self.analysis_open_elevation_radio.setChecked(True)
 
     def _prefetch_weather_api_on_load(self):
-        """Prefetch weather data for the full route at 3km local-time intervals."""
+        """Deprecated: Weather API fetches are centralized in Weather tab."""
         self.preloaded_weather_samples = []
         self.weather_api_loaded = False
-
-        if self.ride_data is None:
-            return
-
-        sample_distance_m = float(self.parameters.get('weather_sample_distance_m', 3000.0))
-        self.file_status.append(f"Weather API: preloading route weather every {sample_distance_m:.0f} m...")
-        QApplication.processEvents()
-
-        prefetch = self.weather_service.prefetch_weather_for_ride(
-            self.ride_data,
-            sample_distance_m=sample_distance_m,
-            status_callback=lambda msg: self.file_status.append(msg),
-        )
-        self.preloaded_weather_samples = prefetch.get('samples', [])
-        self.weather_api_loaded = len(self.preloaded_weather_samples) > 0
-
-        self.file_status.append(
-            f"Weather API done: samples={prefetch.get('sample_count', 0)}, "
-            f"grouped_calls={prefetch.get('grouped_request_count', 0)}"
-        )
-        QApplication.processEvents()
+        self.file_status.append("Weather API prefetch skipped; use Weather tab Fetch weather")
 
     def _disable_segment_parameters(self):
         for i, key in enumerate(list(self.parameters.keys())[:8]):
@@ -2028,7 +2117,6 @@ def main(argv=None):
     enable_file_log = bool(args.file_log or args.log_file)
 
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
-    QCoreApplication.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
     app = QApplication(sys.argv)
     _install_global_error_reporting(
         app,

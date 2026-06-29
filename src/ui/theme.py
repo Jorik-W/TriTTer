@@ -8,7 +8,7 @@ the wizard step rail), so the whole app looks uniform.
 
 from PyQt5.QtCore import QObject, QEvent
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QToolButton
+from PyQt5.QtWidgets import QToolButton, QWidget
 
 # ---- Palette ---------------------------------------------------------------
 ACCENT  = "#3B7DD8"
@@ -354,7 +354,10 @@ class DarkTitleBarFilter(QObject):
         self._seen = set()
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Show and hasattr(obj, 'winId'):
+        # Calling winId() on child widgets can force native children, which
+        # conflicts with embedded web/quick surfaces. Restrict this to
+        # top-level windows only.
+        if event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow():
             try:
                 wid = int(obj.winId())
                 if wid and wid not in self._seen:
