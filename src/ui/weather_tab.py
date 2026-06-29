@@ -177,7 +177,7 @@ class WeatherTab(QWidget):
         time_row.setSpacing(12)
         time_lbl = QLabel("Time:")
         time_lbl.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
-        time_lbl.setFixedWidth(90)
+        time_lbl.setFixedWidth(120)
         self._time_file   = QRadioButton("From file")
         self._time_manual = QRadioButton("Manual")
         self._time_file.setEnabled(False)   # disabled until a file is loaded
@@ -256,8 +256,11 @@ class WeatherTab(QWidget):
         applies_lbl.setFixedWidth(90)
         self.cb_analyse = QCheckBox("Analyse")
         self.cb_plan    = QCheckBox("Plan")
-        self.cb_analyse.setChecked(True)
-        self.cb_plan.setChecked(True)
+        # API applies are locked until a successful fetch; manual source stays usable.
+        self.cb_analyse.setChecked(False)
+        self.cb_plan.setChecked(False)
+        self.cb_analyse.setEnabled(False)
+        self.cb_plan.setEnabled(False)
         applies_row.addWidget(applies_lbl)
         applies_row.addWidget(self.cb_analyse)
         applies_row.addWidget(self.cb_plan)
@@ -275,6 +278,9 @@ class WeatherTab(QWidget):
         self.dt_pick.dateTimeChanged.connect(self._on_changed)
         self.fetch_btn.clicked.connect(self._on_fetch)
 
+        # Start locked in API mode (default source) until fetch succeeds.
+        self._update_apply_targets_state()
+
         self._building = False
 
     # ------------------------------------------------------------------
@@ -285,7 +291,30 @@ class WeatherTab(QWidget):
         manual = self._src_manual.isChecked()
         self.manual_widget.setVisible(manual)
         self.api_widget.setVisible(not manual)
+        self._update_apply_targets_state()
         self._on_changed()
+
+    def _update_apply_targets_state(self):
+        """Enable/disable Analyse/Plan apply toggles based on source/fetch state."""
+        using_api = self._src_api.isChecked()
+        api_ready = bool(
+            self._last_fetch_result and self._last_fetch_result.get("weather_samples")
+        )
+
+        if using_api and not api_ready:
+            self.cb_analyse.setEnabled(False)
+            self.cb_plan.setEnabled(False)
+            self.cb_analyse.setChecked(False)
+            self.cb_plan.setChecked(False)
+            return
+
+        # Manual source is always applicable; API becomes applicable after fetch.
+        was_locked = (not self.cb_analyse.isEnabled() and not self.cb_plan.isEnabled())
+        self.cb_analyse.setEnabled(True)
+        self.cb_plan.setEnabled(True)
+        if using_api and was_locked:
+            self.cb_analyse.setChecked(True)
+            self.cb_plan.setChecked(True)
 
     def _on_time_mode_changed(self):
         file_time = self._time_file.isChecked()
@@ -322,6 +351,7 @@ class WeatherTab(QWidget):
             self.fetch_status.setText("")
             self._last_fetch_result = None
             self.api_result_box.setPlainText(f"Error: {error}")
+            self._update_apply_targets_state()
             return
 
         self._last_fetch_result = result
@@ -331,6 +361,7 @@ class WeatherTab(QWidget):
         if not available or not samples:
             self.fetch_status.setText("")
             self.api_result_box.setPlainText(_NO_DATA_LABEL)
+            self._update_apply_targets_state()
             self.weatherChanged.emit(self.get_config())
             return
 
@@ -349,4 +380,5 @@ class WeatherTab(QWidget):
         lines.append(f"Humidity:       {_s('relative_humidity_2m')} %")
         lines.append(f"Pressure:       {_s('surface_pressure')} hPa")
         self.api_result_box.setPlainText("\n".join(lines))
+        self._update_apply_targets_state()
         self.weatherChanged.emit(self.get_config())

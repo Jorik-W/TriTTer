@@ -49,7 +49,7 @@ ADV_FULL_SEGMENT_MAX_M = 100.0
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PC_DIR = os.path.join(os.path.abspath(__file__), "..", "..")
-ANDROID_GPS_DIR = "/storage/emulated/0/tri-tter/"
+ANDROID_GPS_DIR = "/storage/emulated/0/TriTTer/"
 
 # When frozen (PyInstaller), bundled data lives under sys._MEIPASS.
 _BUNDLE_DIR = getattr(sys, "_MEIPASS", APP_DIR)

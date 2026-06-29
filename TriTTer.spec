@@ -14,8 +14,10 @@ spec_dir = os.path.dirname(os.path.abspath(SPEC))
 src_dir  = os.path.join(spec_dir, "src")
 
 # --- data files -----------------------------------------------------------
+platform_tools_dir = os.path.join(spec_dir, "platform-tools")
 datas = [
     (os.path.join(src_dir, "analyze", "icons"), "icons"),
+    (platform_tools_dir, "platform-tools"),
 ]
 
 # --- build mode: onefile (default) or onefolder --------------------------
