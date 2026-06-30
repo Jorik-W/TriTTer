@@ -69,6 +69,12 @@ def _run_gui(argv):
             splash.close()
         app.main_window = TriTTerWindow(app)
         app.main_window.show()
+        # DWM dark caption bar (Win10 immersive dark + Win11 BG colour).
+        try:
+            from theme import apply_dwm_dark_titlebar
+            apply_dwm_dark_titlebar(int(app.main_window.winId()))
+        except Exception:
+            pass
 
     if splash is not None:
         QTimer.singleShot(1500, create_main_window)

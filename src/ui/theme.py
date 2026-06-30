@@ -257,6 +257,47 @@ def apply_theme(app):
         pass
 
 
+def apply_dwm_dark_titlebar(hwnd: int):
+    """Paint the native Win32 caption bar to match the dark theme.
+
+    Two DWM attributes are set (both are silent no-ops on unsupported OS):
+      • DWMWA_USE_IMMERSIVE_DARK_MODE (20) — dark text/icon colour for Win10+
+      • DWMWA_CAPTION_COLOR (35)           — caption background = BG (#1E1E2E)
+                                            Win11 22000+ only; ignored earlier
+
+    Call *after* the window is shown so winId() has a valid HWND.
+    """
+    import sys
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        dwm = ctypes.windll.dwmapi
+
+        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        value = ctypes.c_int(1)
+        dwm.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd),
+            ctypes.c_uint(20),
+            ctypes.byref(value),
+            ctypes.sizeof(value),
+        )
+
+        # DWMWA_CAPTION_COLOR = 35  (Win11 22000+; no-op on earlier builds)
+        # BG = "#1E1E2E"  →  BGR COLORREF = 0x002E1E1E
+        colorref = ctypes.c_uint(0x002E1E1E)
+        dwm.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd),
+            ctypes.c_uint(35),
+            ctypes.byref(colorref),
+            ctypes.sizeof(colorref),
+        )
+    except Exception:
+        pass
+
+
 def _style_matplotlib():
     """Make matplotlib figures match the dark theme (Analyze plots)."""
     import matplotlib
