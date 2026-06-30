@@ -1,10 +1,9 @@
 """TriTTer shared theme: one dark-flat palette + global stylesheet.
 
-This is the single source of visual truth for the whole app. It promotes the
-palette that originated in bike_estimator (plan/ui/constants.py) and extends the
-stylesheet to cover every widget type the Analyze GUI uses (combo boxes, line
-edits, tables, checkboxes, radio buttons, progress bars, the wizard step rail),
-so both tabs look uniform.
+This is the single source of visual truth for the whole app. It holds the
+dark-flat palette and a stylesheet covering every widget type both tabs use
+(combo boxes, line edits, tables, checkboxes, radio buttons, progress bars,
+the wizard step rail), so the whole app looks uniform.
 """
 
 # ---- Palette ---------------------------------------------------------------
@@ -47,27 +46,27 @@ QLabel {{
 }}
 QSlider::groove:horizontal {{
     height: 6px;
-    background: {BG};
+    background: {BORDER};
     border: none;
     border-radius: 3px;
 }}
 QSlider::add-page:horizontal {{
-    background: {BG};
+    background: {BORDER};
     border-radius: 3px;
 }}
 QSlider::handle:horizontal {{
     background: {ACCENT};
-    width: 18px;
-    height: 18px;
+    width: 12px;
+    height: 12px;
     margin: -6px 0;
-    border-radius: 9px;
+    border-radius: 5px;
 }}
 QSlider::sub-page:horizontal {{
     background: {ACCENT};
     border-radius: 3px;
 }}
 QSlider:disabled::handle:horizontal {{
-    background: {MUTED};
+    background: {BG};
 }}
 QPushButton {{
     background-color: {ACCENT};
@@ -123,6 +122,8 @@ QDoubleSpinBox, QSpinBox, QLineEdit {{
     padding: 3px 6px;
     font-size: 12px;
 }}
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button,
+QSpinBox::up-button, QSpinBox::down-button {{ width: 0px; border: none; }}
 QDoubleSpinBox:focus, QSpinBox:focus, QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
 QDoubleSpinBox:disabled, QSpinBox:disabled, QLineEdit:disabled {{
     color: {MUTED};

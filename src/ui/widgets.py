@@ -7,7 +7,7 @@ style), which is the uniform input the project standardizes on.
 """
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QFrame, QDoubleSpinBox,
+    QSizePolicy, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QFrame, QDoubleSpinBox,
     QCheckBox,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -98,6 +98,7 @@ class SliderRow(QWidget):
         layout.addWidget(self._label)
 
         self.slider = QSlider(Qt.Horizontal)
+        self.slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.slider.setMinimum(0)
         self.slider.setMaximum(self._steps)
         self.slider.setValue(self._to_slider(default))
@@ -112,7 +113,7 @@ class SliderRow(QWidget):
         self.spin.setValue(default)
         if suffix:
             self.spin.setSuffix(suffix)
-        self.spin.setFixedWidth(108)
+        self.spin.setFixedWidth(100)
         self.spin.setKeyboardTracking(False)
         self.spin.setAlignment(Qt.AlignRight)
         self.spin.valueChanged.connect(self._on_spin_change)

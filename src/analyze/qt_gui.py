@@ -418,13 +418,13 @@ class GUIInterface(QMainWindow):
         self.load_open_meteo_checkbox = QCheckBox()
         self.load_open_meteo_checkbox.setChecked(False)
 
-        # Wind-effect slider (not shown; _save_parameters reads/writes it)
-        self.wind_effect_slider = QSlider(Qt.Horizontal)
-        self.wind_effect_slider.setRange(0, 100)
-        self.wind_effect_slider.setValue(
-            int(self.analyzer.parameters.get('wind_effect_factor', 0.40) * 100))
+        # Wind-effect SliderRow (not shown; _save_parameters reads/writes it)
+        self.wind_effect_slider = SliderRow(
+            "Wind effect factor", 0.00, 1.00,
+            self.analyzer.parameters.get('wind_effect_factor', 0.40),
+            0.01, 2, "")
         self.wind_effect_slider.valueChanged.connect(self._on_wind_effect_slider_moved)
-        self.wind_effect_slider.sliderReleased.connect(self._on_wind_effect_changed)
+        self.wind_effect_slider.interactionFinished.connect(self._on_wind_effect_changed)
         self.wind_effect_value_label = QLabel()
 
         # ── Top action bar ────────────────────────────────────────────────
@@ -654,63 +654,22 @@ class GUIInterface(QMainWindow):
         controls_layout.setSpacing(4)
 
         # Wind speed
-        self.sim_wind_speed_slider = QSlider(Qt.Horizontal)
-        self.sim_wind_speed_slider.setMinimum(0)
-        self.sim_wind_speed_slider.setMaximum(200)
-        self.sim_wind_speed_slider.setValue(0)
-        self.sim_wind_speed_slider.setTickPosition(QSlider.TicksBelow)
-        self.sim_wind_speed_slider.setTickInterval(20)
+        self.sim_wind_speed_slider = SliderRow("Wind Speed", 0.0, 20.0, 0.0, 0.1, 1, " m/s")
         self.sim_wind_speed_slider.valueChanged.connect(self._on_simulation_params_changed)
-        self.sim_wind_speed_value = QLabel("0.0")
-        self.sim_wind_speed_value.setFixedWidth(50)
-
-        spd_row = QHBoxLayout()
-        spd_lbl = QLabel("Wind Speed (m/s):")
-        spd_lbl.setFixedWidth(150)
-        spd_row.addWidget(spd_lbl)
-        spd_row.addWidget(self.sim_wind_speed_slider)
-        spd_row.addWidget(self.sim_wind_speed_value)
-        controls_layout.addLayout(spd_row)
+        controls_layout.addWidget(self.sim_wind_speed_slider)
 
         # Wind angle
-        self.sim_wind_angle_slider = QSlider(Qt.Horizontal)
-        self.sim_wind_angle_slider.setMinimum(-180)
-        self.sim_wind_angle_slider.setMaximum(180)
-        self.sim_wind_angle_slider.setValue(0)
-        self.sim_wind_angle_slider.setTickPosition(QSlider.TicksBelow)
-        self.sim_wind_angle_slider.setTickInterval(45)
+        self.sim_wind_angle_slider = SliderRow("Wind Angle", -180, 180, 0, 1, 0, "\u00b0")
         self.sim_wind_angle_slider.valueChanged.connect(self._on_simulation_params_changed)
-        self.sim_wind_angle_value = QLabel("0")
-        self.sim_wind_angle_value.setFixedWidth(50)
-
-        ang_row = QHBoxLayout()
-        ang_lbl = QLabel("Wind Angle (°):")
-        ang_lbl.setFixedWidth(150)
-        ang_row.addWidget(ang_lbl)
-        ang_row.addWidget(self.sim_wind_angle_slider)
-        ang_row.addWidget(self.sim_wind_angle_value)
-        controls_layout.addLayout(ang_row)
+        controls_layout.addWidget(self.sim_wind_angle_slider)
 
         # Wind effect factor
-        self.sim_wind_factor_slider = QSlider(Qt.Horizontal)
-        self.sim_wind_factor_slider.setMinimum(0)
-        self.sim_wind_factor_slider.setMaximum(100)
-        self.sim_wind_factor_slider.setValue(
-            int(self.analyzer.parameters.get('wind_effect_factor', 0.40) * 100))
-        self.sim_wind_factor_slider.setTickPosition(QSlider.TicksBelow)
-        self.sim_wind_factor_slider.setTickInterval(10)
+        self.sim_wind_factor_slider = SliderRow(
+            "Wind Effect Factor", 0.00, 1.00,
+            self.analyzer.parameters.get('wind_effect_factor', 0.40),
+            0.01, 2, "")
         self.sim_wind_factor_slider.valueChanged.connect(self._on_simulation_params_changed)
-        self.sim_wind_factor_value = QLabel(
-            f"{self.analyzer.parameters.get('wind_effect_factor', 0.40):.2f}")
-        self.sim_wind_factor_value.setFixedWidth(50)
-
-        fac_row = QHBoxLayout()
-        fac_lbl = QLabel("Wind Effect Factor:")
-        fac_lbl.setFixedWidth(150)
-        fac_row.addWidget(fac_lbl)
-        fac_row.addWidget(self.sim_wind_factor_slider)
-        fac_row.addWidget(self.sim_wind_factor_value)
-        controls_layout.addLayout(fac_row)
+        controls_layout.addWidget(self.sim_wind_factor_slider)
 
         # Temperature & pressure
         cond_row = QHBoxLayout()
@@ -1146,10 +1105,7 @@ class GUIInterface(QMainWindow):
             # Update slider if wind_effect_factor changed
             if 'wind_effect_factor' in self.parameters:
                 factor_value = self.parameters['wind_effect_factor']
-                slider_value = int(factor_value * 100)
-                self.wind_effect_slider.blockSignals(True)
-                self.wind_effect_slider.setValue(slider_value)
-                self.wind_effect_slider.blockSignals(False)
+                self.wind_effect_slider.set_value(factor_value, silent=True)
                 self.wind_effect_value_label.setText(f"{factor_value:.2f}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error saving parameters: {str(e)}")
@@ -1807,14 +1763,8 @@ class GUIInterface(QMainWindow):
             QMessageBox.critical(self, "Error", f"Export failed: {str(e)}")
 
     def _on_simulation_params_changed(self):
-        """Update simulation parameter display values"""
-        wind_speed = (self.sim_wind_speed_slider.value() / 10.0) + 0.000001
-        wind_angle = self.sim_wind_angle_slider.value()
-        wind_factor = self.sim_wind_factor_slider.value() / 100.0
-        
-        self.sim_wind_speed_value.setText(f"{wind_speed:.1f}")
-        self.sim_wind_angle_value.setText(f"{wind_angle}")
-        self.sim_wind_factor_value.setText(f"{wind_factor:.2f}")
+        """SliderRow spinboxes already display live values; nothing extra needed."""
+        pass
 
     def _run_simulation(self):
         """Run weather simulation with manual wind parameters"""
@@ -1823,9 +1773,9 @@ class GUIInterface(QMainWindow):
             return
         
         try:
-            wind_speed = (self.sim_wind_speed_slider.value() / 10.0) + 0.000001
+            wind_speed = self.sim_wind_speed_slider.value() + 0.000001
             wind_angle = self.sim_wind_angle_slider.value()
-            wind_factor = self.sim_wind_factor_slider.value() / 100.0
+            wind_factor = self.sim_wind_factor_slider.value()
             temperature = float(self.sim_temp_entry.text())
             pressure = float(self.sim_pressure_entry.text())
 
@@ -2209,12 +2159,8 @@ class GUIInterface(QMainWindow):
 
     def _on_wind_effect_slider_moved(self, value):
         """Update the wind effect value label as slider moves"""
-        new_factor = value / 100.0
+        new_factor = value  # SliderRow.valueChanged already emits the real float
         self.wind_effect_value_label.setText(f"{new_factor:.2f}")
-        
-        # Also update the parameter entry in the parameters tab
-        if 'wind_effect_factor' in self.param_entries:
-            self.param_entries['wind_effect_factor'].setText(f"{new_factor:.2f}")
 
     def _on_wind_effect_changed(self):
         """Handle wind effect slider release - re-run analysis with new factor"""
@@ -2226,7 +2172,7 @@ class GUIInterface(QMainWindow):
             old_ride_info = self.analysis_results.get('summary', {}).get('ride_info')
 
             # Get the new wind effect factor from slider
-            new_factor = self.wind_effect_slider.value() / 100.0
+            new_factor = self.wind_effect_slider.value()
 
             # Update analyzer parameter
             self.analyzer.update_parameters({'wind_effect_factor': new_factor})

@@ -38,7 +38,6 @@ class ProfileTab(QWidget):
         root.addWidget(scroll)
 
         inner = QWidget()
-        inner.setMaximumWidth(780)
         layout = QVBoxLayout(inner)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)

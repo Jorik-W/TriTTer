@@ -22,7 +22,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from planui.constants import ACCENT, BG, GREEN, MUTED, ORANGE, RED_COL, SURFACE, TEXT, fmt_time
+from theme import ACCENT, BG, GREEN, MUTED, ORANGE, RED_COL, SURFACE, TEXT
+from planui.widgets import fmt_time
 from planui.widgets import MetricCard, SliderRow
 from weather_plan import MODE_FORECAST, MODE_HISTORY
 
@@ -105,9 +106,13 @@ class AdvancedInputPanel(QWidget):
         self._suppress_weather_signal = False
 
         box = QGroupBox("Conditions (weather)")
-        form = QFormLayout(box)
-        form.setContentsMargins(8, 6, 8, 6)
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(8, 6, 8, 6)
+        box_layout.setSpacing(4)
+
+        form = QFormLayout()
         form.setSpacing(4)
+        form.setContentsMargins(0, 0, 0, 0)
 
         self.cmb_weather_mode = QComboBox()
         self.cmb_weather_mode.addItem("Forecast (future ride)", MODE_FORECAST)
@@ -151,10 +156,13 @@ class AdvancedInputPanel(QWidget):
         form.addRow("Start", self.dt_start)
         form.addRow("", self.chk_use_fit_ts)
         form.addRow("", self.chk_use_api)
-        form.addRow(self.s_rho)
-        form.addRow(self.s_wind_speed)
-        form.addRow(self.s_wind_dir)
-        form.addRow(self.lbl_weather_status)
+        box_layout.addLayout(form)
+
+        # Sliders in plain VBox so they match every other tab's layout
+        for s in (self.s_rho, self.s_wind_speed, self.s_wind_dir):
+            box_layout.addWidget(s)
+
+        box_layout.addWidget(self.lbl_weather_status)
 
         self.weather_box = box
         self.cmb_weather_mode.setEnabled(False)
@@ -379,7 +387,7 @@ class AdvancedResultsPanel(QWidget):
         layout.addLayout(button_layout)
 
         metrics_row = QHBoxLayout()
-        metrics_row.setSpacing(8)
+        metrics_row.setSpacing(12)
         self.card_time = MetricCard("Estimated time", "-", accent=True)
         self.card_speed = MetricCard("Avg speed", "-")
         self.card_np = MetricCard("NP", "-")

@@ -32,10 +32,9 @@ from weather_plan import (
     MODE_FORECAST,
     MODE_HISTORY,
 )
-from planui.constants import (
-    ACCENT, BG, SURFACE, CARD, TEXT, MUTED, GREEN, ORANGE, RED_COL, STYLE, fmt_time
-)
-from planui.widgets import MetricCard, SliderRow, ProfileBar, ElevationPlot
+from theme import ACCENT, BG, SURFACE, CARD, TEXT, MUTED, GREEN, ORANGE, RED_COL
+from widgets import MetricCard, SliderRow
+from planui.widgets import ProfileBar, ElevationPlot, fmt_time
 from planui.advanced_tab import AdvancedInputPanel, AdvancedResultsPanel
 
 
@@ -344,7 +343,6 @@ class BikeEstimator(QMainWindow):
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.timeout.connect(self._on_debounce_timeout)
         self._build_ui()
-        self.setStyleSheet(STYLE)
         QTimer.singleShot(50, self._recalculate)
 
     def _recover_ui_from_worker_error(self, message, *, source):

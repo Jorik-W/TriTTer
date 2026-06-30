@@ -10,10 +10,25 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
-from planui.constants import ACCENT, CARD, TEXT, MUTED, ORANGE, GREEN, RED_COL
+from theme import ACCENT, CARD, TEXT, MUTED, ORANGE, GREEN, RED_COL
 
-# Re-export shared widgets so existing callers don't need updating.
-from widgets import MetricCard, SliderRow  # noqa: F401  (shared ui/widgets)
+# Re-export all shared widgets so plan modules have a single import point.
+from widgets import MetricCard, SliderRow, SectionHeader, CheckRow  # noqa: F401  (shared ui/widgets)
+
+
+def fmt_time(h, with_seconds=False):  # noqa: F401 — re-exported for plan callers
+    """Format a fractional-hour value as 'Xh MMmin [SSs]'."""
+    if with_seconds:
+        total_s = round(h * 3600)
+        hh, rem = divmod(total_s, 3600)
+        mm, ss = divmod(rem, 60)
+        return f"{hh}h {mm:02d}min {ss:02d}s"
+    hh = int(h)
+    mm = round((h - hh) * 60)
+    if mm == 60:
+        hh += 1
+        mm = 0
+    return f"{hh}h {mm:02d}min"
 
 try:
     import pyqtgraph as pg
