@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
     QRadioButton, QButtonGroup, QGroupBox, QAbstractItemView, QHeaderView,
     QTableWidgetItem, QSizePolicy,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QRect
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QRect, QByteArray
 from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter, QBrush, QLinearGradient, QColor
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
 
@@ -444,6 +444,12 @@ class GUIInterface(QMainWindow):
         self.analysis_status = QLabel("Ready to analyse")
         self.analysis_status.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
         top_bar.addWidget(self.analysis_status)
+
+        about_btn = QPushButton("?")
+        about_btn.setFixedSize(25, 25)
+        about_btn.setToolTip("About this program")
+        about_btn.clicked.connect(self._show_about_dialog)
+        top_bar.addWidget(about_btn)
         layout.addLayout(top_bar)
 
         # ── Collapsible Advanced settings strip ───────────────────────────
@@ -859,6 +865,73 @@ class GUIInterface(QMainWindow):
                 except Exception:
                     pass
             # else: leave preloaded_weather_samples as-is (from file load).
+
+    def _show_about_dialog(self):
+        dialog = QDialog(self, flags=Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+        dialog.setWindowTitle("About CdA Analyzer")
+        dialog.setFixedWidth(400)  # Optional: fixed width
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        # Logo
+        logo_data = QByteArray.fromBase64(LOGO_BASE64.encode('utf-8'))
+        pixmap = QPixmap()
+        pixmap.loadFromData(logo_data)
+        pixmap = pixmap.scaledToWidth(80, Qt.SmoothTransformation)  # Smaller logo
+        logo_label = QLabel()
+        logo_label.setPixmap(pixmap)
+        logo_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(logo_label)
+
+        # Text
+        about_text = """
+        <b>CdA Analyzer</b><br>
+        Version 1.0<br><br>
+        <b>Author:</b> Jorik Wittevrongel<br>
+        <b>GitHub:</b> <a href='https://github.com/JorikWit/TriTTer'>https://github.com/JorikWit/CdA-Analyser</a><br><br>
+
+        This program is licensed under the
+        MIT License.<br>
+        See the LICENSE file for details.<br><br>
+
+        <b>Icon credit:</b><br>
+        Time Trial Bike icon by
+        <a href='https://www.flaticon.com/authors/izwar-muis'>Izwar Muis</a>
+        from
+        <a href='https://www.flaticon.com/free-icon/time-trial-bike_17736701'>Flaticon</a>
+        (used with attribution).<br><br>
+
+        <b>Third-party libraries:</b><br>
+        - fitparse (BSD License)<br>
+        - folium (MIT License)<br>
+        - geopy (MIT License)<br>
+        - matplotlib (Matplotlib License, BSD-compatible)<br>
+        - numpy (BSD-3-Clause)<br>
+        - pandas (BSD-3-Clause)<br>
+        - Pillow (PIL Software License, similar to MIT)<br>
+        - PyQt5 (GPL v3)<br>
+        - PyQt5_sip (GPL v3)<br>
+        - requests (Apache-2.0)<br>
+        - scipy (BSD License)<br>
+        """
+        text_label = QLabel(about_text)
+        text_label.setTextFormat(Qt.RichText)
+        text_label.setOpenExternalLinks(True)  # Make GitHub link clickable
+        text_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        layout.addWidget(text_label)
+
+        # OK button
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(dialog.accept)
+        ok_btn.setFixedWidth(80)
+        ok_btn.setDefault(True)
+        ok_btn.setAutoDefault(True)
+        ok_btn.setCursor(Qt.PointingHandCursor)
+        layout.addWidget(ok_btn, alignment=Qt.AlignCenter)
+
+        dialog.exec_()
 
     def _browse_fit_file(self):
         # Adjust to proper default path

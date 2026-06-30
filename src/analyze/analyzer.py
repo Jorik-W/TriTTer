@@ -778,7 +778,7 @@ class CDAAnalyzer:
         if abs(math.cos(wind_angle_rad)) < 0.01:  # Near ±90°
             wind_speed_eff = abs(effective_wind) / wind_effect_factor if wind_effect_factor > 0 else wind_speed
         else:
-            wind_speed_eff = effective_wind / (math.cos(wind_angle_rad) * wind_effect_factor)
+            wind_speed_eff = effective_wind / (math.cos(wind_angle_rad) * wind_effect_factor) if wind_effect_factor > 0 else wind_speed
         
         # Crosswind component from the original wind
         v_cross = wind_speed_eff * math.sin(wind_angle_rad)

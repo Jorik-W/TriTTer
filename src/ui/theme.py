@@ -6,6 +6,7 @@ dark-flat palette and a stylesheet covering every widget type both tabs use
 the wizard step rail), so the whole app looks uniform.
 """
 
+from PyQt5.QtCore import QObject, QEvent
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QToolButton
 
@@ -336,6 +337,32 @@ def apply_calendar_style(calendar_widget):
         if btn:
             btn.setIcon(QIcon())
             btn.setText(glyph)
+
+
+class DarkTitleBarFilter(QObject):
+    """App-level event filter that auto-applies the dark caption bar
+    to every top-level window (QMessageBox, QFileDialog, QDialog, …).
+
+    Install once on the QApplication::
+
+        app.installEventFilter(DarkTitleBarFilter(app))
+    """
+    _seen = None  # set of winIds already painted
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._seen = set()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Show and hasattr(obj, 'winId'):
+            try:
+                wid = int(obj.winId())
+                if wid and wid not in self._seen:
+                    self._seen.add(wid)
+                    apply_dwm_dark_titlebar(wid)
+            except Exception:
+                pass
+        return False
 
 
 def apply_dwm_dark_titlebar(hwnd: int):

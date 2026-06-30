@@ -53,8 +53,9 @@ def _run_gui(argv):
 
     app = QApplication(sys.argv)
     try:
-        from theme import apply_theme
+        from theme import apply_theme, DarkTitleBarFilter
         apply_theme(app)
+        app.installEventFilter(DarkTitleBarFilter(app))
     except Exception:
         pass
     if _install_global_error_reporting is not None:
