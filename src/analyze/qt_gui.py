@@ -890,7 +890,7 @@ class GUIInterface(QMainWindow):
         <b>CdA Analyzer</b><br>
         Version 1.0<br><br>
         <b>Author:</b> Jorik Wittevrongel<br>
-        <b>GitHub:</b> <a href='https://github.com/JorikWit/TriTTer'>https://github.com/JorikWit/CdA-Analyser</a><br><br>
+        <b>GitHub:</b> <a href='https://github.com/Jorik-W/TriTTer'>https://github.com/JorikWit/CdA-Analyser</a><br><br>
 
         This program is licensed under the
         MIT License.<br>
