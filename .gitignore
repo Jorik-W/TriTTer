@@ -20,3 +20,6 @@ Thumbs.db
 
 # App data (user profiles live in ~/.tritter, not the repo)
 *.log
+
+# Bundled Android platform-tools (ADB) - large binaries, fetched separately
+platform-tools/

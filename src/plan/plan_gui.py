@@ -491,8 +491,8 @@ class BikeEstimator(QMainWindow):
 
         rider_box = QGroupBox("Rider & equipment")
         rider_layout = QVBoxLayout(rider_box)
-        self.s_cda   = SliderRow("CdA",              0.18, 0.45, 0.261, 0.001, 3, " m\u00b2")
-        self.s_climb_cda = SliderRow("Climbing CdA",   0.18, 0.60, 0.40, 0.001, 3, " m\u00b2")
+        self.s_cda   = SliderRow("CdA",              0.18, 0.45, 0.261, 0.001, 3, "")
+        self.s_climb_cda = SliderRow("Climbing CdA",   0.18, 0.60, 0.40, 0.001, 3, "")
         self.s_mass  = SliderRow("Total mass",         50,  120,  87.0,  0.5,  1, " kg")
         self.s_crr   = SliderRow("Crr",            0.0020, 0.0080, 0.0030, 0.0001, 4, "")
         self.s_eff   = SliderRow("Drivetrain eff.",  95.0, 100.0, 97.5, 0.1,  1, "%")

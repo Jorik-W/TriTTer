@@ -2380,8 +2380,11 @@ def create_splash(app, logo_path, text):
     """Create a splash screen with a box around the logo and text below it."""
     splash = QWidget(flags=Qt.SplashScreen | Qt.FramelessWindowHint)
 
-    # Set white background
-    splash.setStyleSheet("background-color: white;")
+    # Dark theme to match the app.
+    splash.setStyleSheet(
+        "QWidget { background-color: #1E1E2E; }"
+        "QLabel { color: #E8E8F0; background: transparent; }"
+    )
 
     layout = QVBoxLayout(splash)
     layout.setContentsMargins(20, 20, 20, 20)

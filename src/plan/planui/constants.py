@@ -38,7 +38,11 @@ QGroupBox::title {{
 }}
 QSlider::groove:horizontal {{
     height: 6px;
-    background: #3A3A52;
+    background: {BG};
+    border-radius: 3px;
+}}
+QSlider::add-page:horizontal {{
+    background: {BG};
     border-radius: 3px;
 }}
 QSlider::handle:horizontal {{

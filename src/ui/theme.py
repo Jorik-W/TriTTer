@@ -47,8 +47,12 @@ QLabel {{
 }}
 QSlider::groove:horizontal {{
     height: 6px;
-    background: transparent;
-    border: 1px solid {BORDER};
+    background: {BG};
+    border: none;
+    border-radius: 3px;
+}}
+QSlider::add-page:horizontal {{
+    background: {BG};
     border-radius: 3px;
 }}
 QSlider::handle:horizontal {{
@@ -240,6 +244,12 @@ QToolTip {{
 
 def apply_theme(app):
     """Apply the global dark-flat stylesheet to a QApplication."""
+    # Fusion fully honours QSS sub-controls (slider groove/handle, etc.);
+    # the native Windows style otherwise paints its own grey slider groove.
+    try:
+        app.setStyle("Fusion")
+    except Exception:
+        pass
     app.setStyleSheet(STYLE)
     try:
         _style_matplotlib()
