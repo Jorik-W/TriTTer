@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QTabWidget, QMessageBox,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt5.QtGui import QFont
 
 from profiles import ProfileStore
@@ -17,6 +17,36 @@ from weather_tab import WeatherTab
 from open_file_tab import OpenFileTab
 from qt_gui import GUIInterface
 from plan_gui import PlanTab
+
+
+class _WeatherFetchWorker(QObject):
+    """Background thread worker: calls WeatherService.get_weather_data."""
+    finished = pyqtSignal(dict)   # result dict on success
+    failed   = pyqtSignal(str)    # error string on failure
+
+    def __init__(self, lat, lon, ts):
+        super().__init__()
+        self._lat = lat
+        self._lon = lon
+        self._ts  = ts
+
+    def run(self):
+        try:
+            from weather import WeatherService
+            svc = WeatherService()
+            data = svc.get_weather_data(self._lat, self._lon, self._ts)
+            # Normalise to the format show_fetch_result expects.
+            samples = [{
+                "temperature_2m":        data.get("temperature"),
+                "wind_speed_10m":        data.get("wind_speed"),
+                "wind_direction_10m":    data.get("wind_direction"),
+                "surface_pressure":      data.get("pressure"),
+                "relative_humidity_2m":  data.get("humidity"),
+            }]
+            self.finished.emit({"samples": samples, "available": True,
+                                 "sample_count": 1})
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class TriTTerWindow(QMainWindow):
@@ -179,9 +209,38 @@ class TriTTerWindow(QMainWindow):
     # ---- weather changes ----------------------------------------------
     def _on_weather_changed(self, cfg: dict):
         if cfg.get("_request_fetch"):
-            # Shell handles the actual fetch in Phase 3 (needs file geometry).
-            self.weather_tab.show_fetch_result({}, error="Load a file first to fetch weather.")
+            course = self.open_file_tab.course
+            if course is None or not course.has_gps:
+                self.weather_tab.show_fetch_result(
+                    {}, error="Load a FIT/GPX file with GPS data first.")
+                return
+            # Pick a representative lat/lon (midpoint of route).
+            lats  = [v for v in course.latitudes  if v is not None]
+            lons  = [v for v in course.longitudes if v is not None]
+            if not lats:
+                self.weather_tab.show_fetch_result(
+                    {}, error="No GPS coordinates found in loaded file.")
+                return
+            mid = len(lats) // 2
+            lat, lon = lats[mid], lons[mid]
+
+            # Determine the requested timestamp.
+            import datetime as _dt
+            time_mode = cfg.get("api_time_mode", "file")
+            if time_mode == "manual":
+                qdt = cfg.get("api_datetime")
+                if qdt is not None:
+                    ts = _dt.datetime(qdt.date().year(), qdt.date().month(),
+                                      qdt.date().day(), qdt.time().hour(),
+                                      qdt.time().minute())
+                else:
+                    ts = course.start_time or _dt.datetime.now()
+            else:
+                ts = course.start_time or _dt.datetime.now()
+
+            self._run_weather_fetch(lat, lon, ts)
             return
+
         wef = cfg.get("wind_effect_factor", 0.40)
         if cfg.get("applies_analyse", True):
             try:
@@ -194,6 +253,28 @@ class TriTTerWindow(QMainWindow):
                 self.plan_gui._recalculate()
             except Exception:
                 pass
+
+    def _run_weather_fetch(self, lat, lon, ts):
+        """Start a background weather fetch and wire result back to weather_tab."""
+        thread = QThread(self)
+        worker = _WeatherFetchWorker(lat, lon, ts)
+        worker.moveToThread(thread)
+
+        def on_done(result):
+            self.weather_tab.show_fetch_result(result)
+            thread.quit()
+
+        def on_fail(err):
+            self.weather_tab.show_fetch_result({}, error=err)
+            thread.quit()
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(on_done)
+        worker.failed.connect(on_fail)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
 
     # ---- rider sync ---------------------------------------------------
     def _apply_rider(self, rider):
