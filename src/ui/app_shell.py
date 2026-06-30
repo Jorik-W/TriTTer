@@ -205,7 +205,7 @@ class TriTTerWindow(QMainWindow):
                 if st_local is not None:
                     qdt = QDateTime(st_local.year, st_local.month, st_local.day,
                                     st_local.hour, st_local.minute, st_local.second)
-                    self.weather_tab.set_file_start_time(qdt)
+                    self.weather_tab.set_file_start_time(qdt, has_power=course.has_power)
             except Exception:
                 pass
 

@@ -31,8 +31,10 @@ def _run_gui(argv):
     from app_shell import TriTTerWindow
 
     # QtWebEngine (folium map view) requires shared GL contexts set before the
-    # QApplication is constructed.
+    # QApplication is constructed. Prevent native sibling widgets as well,
+    # which avoids QQuickWidget warnings from embedded web/quick surfaces.
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+    QCoreApplication.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
 
     # Reuse the analyzer's crash reporting / splash if available.
     try:

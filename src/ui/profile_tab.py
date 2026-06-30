@@ -6,10 +6,9 @@ from PyQt5.QtWidgets import (
     QMessageBox, QScrollArea,
 )
 from PyQt5.QtCore import pyqtSignal, Qt
-from PyQt5.QtGui import QFont
 
 from profiles import Rider
-from widgets import SliderRow
+from widgets import SectionHeader, SliderRow
 from theme import MUTED
 
 
@@ -44,15 +43,12 @@ class ProfileTab(QWidget):
         layout.setSpacing(8)
         scroll.setWidget(inner)
 
-        title = QLabel("Rider Profiles")
-        title.setFont(QFont("Arial", 14, QFont.Bold))
-        layout.addWidget(title, alignment=Qt.AlignCenter)
-
-        info = QLabel("Profiles are the single source of truth for rider parameters. "
-                      "A rider selected here is used by the Analyze and Plan tabs. "
-                      "Saved to ~/.tritter/profiles.json.")
-        info.setWordWrap(True)
-        layout.addWidget(info)
+        layout.addWidget(SectionHeader(
+            "Rider profiles",
+            subtitle="Profiles are the single source of truth for rider parameters. "
+                     "The selected rider is used by the Analyse and Plan tabs. "
+                     "Saved to ~/.tritter/profiles.json."
+        ))
 
         # Selector row
         sel_row = QHBoxLayout()

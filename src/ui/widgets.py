@@ -83,6 +83,7 @@ class SliderRow(QWidget):
     def __init__(self, label, min_val, max_val, default, step,
                  decimals=0, suffix="", label_width=150, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         self.min_val = min_val
         self.max_val = max_val
         self.step = step
@@ -100,7 +101,7 @@ class SliderRow(QWidget):
         layout.addWidget(self._label)
 
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.slider.setMinimum(0)
         self.slider.setMaximum(self._steps)
         self.slider.setValue(self._to_slider(default))

@@ -12,13 +12,13 @@ The :attr:`weatherChanged` signal fires on every meaningful change.
 """
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QRadioButton, QButtonGroup,
+    QSizePolicy, QSpacerItem, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QRadioButton, QButtonGroup,
     QPushButton, QPlainTextEdit, QCheckBox, QDateTimeEdit,
     QScrollArea, QFrame,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
 
-from widgets import SliderRow
+from widgets import SectionHeader, SliderRow
 from theme import MUTED, TEXT, ACCENT, SURFACE, BORDER, GREEN, ORANGE, RED_COL, apply_calendar_style
 
 
@@ -84,11 +84,13 @@ class WeatherTab(QWidget):
             })
         return cfg
 
-    def set_file_start_time(self, dt: QDateTime):
+    def set_file_start_time(self, dt: QDateTime, has_power: bool = False):
         """Called by the Open File tab when a new file is loaded."""
         self._file_dt = dt
         self._time_file.setEnabled(True)
         self._no_file_warning.setVisible(False)
+        if has_power:
+            self._time_file.setChecked(True)
         if self._time_file.isChecked():
             self.dt_pick.setDateTime(dt)
             self.dt_pick.setEnabled(False)
@@ -125,6 +127,12 @@ class WeatherTab(QWidget):
         layout.setSpacing(6)
         scroll.setWidget(inner)
 
+        layout.addWidget(SectionHeader(
+            "Weather",
+            subtitle="Choose manual conditions or fetch weather from Open-Meteo. "
+                     "Weather settings can be applied to Analyse and Plan."
+        ))
+
         # ── Source selector ──────────────────────────────────────────
         src_row = QHBoxLayout()
         src_row.setSpacing(12)
@@ -141,6 +149,7 @@ class WeatherTab(QWidget):
 
         # ── Manual conditions ────────────────────────────────────────
         self.manual_widget = QWidget()
+        self.manual_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         mb_layout = QVBoxLayout(self.manual_widget)
         mb_layout.setContentsMargins(0, 4, 0, 4)
         mb_layout.setSpacing(2)
@@ -156,6 +165,7 @@ class WeatherTab(QWidget):
 
         # ── API conditions ───────────────────────────────────────────
         self.api_widget = QWidget()
+        self.api_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         ab_layout = QVBoxLayout(self.api_widget)
         ab_layout.setContentsMargins(0, 4, 0, 4)
         ab_layout.setSpacing(4)
@@ -260,7 +270,7 @@ class WeatherTab(QWidget):
         self.cb_analyse.toggled.connect(self._on_changed)
         self.cb_plan.toggled.connect(self._on_changed)
 
-        layout.addStretch()
+        layout.addItem(QSpacerItem(0, 0, QSizePolicy.Fixed, QSizePolicy.Expanding))
 
         # ── Connect source/time toggles ───────────────────────────────
         self._src_manual.toggled.connect(self._on_source_changed)

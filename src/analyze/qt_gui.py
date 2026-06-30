@@ -2027,6 +2027,8 @@ def main(argv=None):
 
     enable_file_log = bool(args.file_log or args.log_file)
 
+    QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+    QCoreApplication.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
     app = QApplication(sys.argv)
     _install_global_error_reporting(
         app,

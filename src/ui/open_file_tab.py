@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QPlainTextEdit, QGroupBox, QSizePolicy,
+    QFileDialog, QPlainTextEdit, QGroupBox, QSizePolicy, QSpacerItem
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -131,8 +131,8 @@ class OpenFileTab(QWidget):
         # ── Manual course (shown when no file loaded) ─────────────────
         self.manual_course_box = QGroupBox("Manual course (used by Plan when no file is loaded)")
         mc_layout = QVBoxLayout(self.manual_course_box)
-        mc_layout.setSpacing(4)
         mc_layout.setContentsMargins(8, 8, 8, 8)
+        mc_layout.setSpacing(4)
         self.mc_dist  = SliderRow("Distance",          0,   350, 180, 0.5, 1, " km", label_width=180)
         self.mc_elev  = SliderRow("Elevation gain",     0,  5000, 2000, 50, 0, " m",  label_width=180)
         self.mc_grad  = SliderRow("Climb gradient",     0.0,  15,  3.0, 0.1, 1, "%",  label_width=180)
@@ -140,9 +140,10 @@ class OpenFileTab(QWidget):
         for s in [self.mc_dist, self.mc_elev, self.mc_grad, self.mc_dgrad]:
             mc_layout.addWidget(s)
             s.valueChanged.connect(self._on_manual_course_changed)
+        self.manual_course_box.setMaximumHeight(200)
         layout.addWidget(self.manual_course_box)
 
-        layout.addStretch()
+        layout.addItem(QSpacerItem(0, 0, QSizePolicy.Fixed, QSizePolicy.Expanding))
 
     # ------------------------------------------------------------------
     # Slots

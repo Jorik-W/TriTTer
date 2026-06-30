@@ -1564,6 +1564,8 @@ PlanTab = BikeEstimator
 
 
 def main():
+    QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+    QCoreApplication.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
     app = QApplication(sys.argv)
     app.setApplicationName("Bike Loop Time Estimator")
 
