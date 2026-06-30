@@ -1,17 +1,17 @@
-# TriTTer — TODO
+remove wizzerd from anayles.
+Add Open file tab
+this open file (for both analyse and plan)
+   if gpx disable analyse or fit without all requerd data show usefull message in analyse tab
+Plan and analyse only show results.
+Weather setting are done in weather tab.
+select manual weather, forecast or fit file time or manual time (4 options)
 
-## GUI (done)
+Color titlebar of the program in same color then program
 
-    - [x] Modern titlebar with tabs. About button spaced to the far right of the tab bar.
-    - [x] Remove wind effect factor from user page (now hidden; still driven by Results wind slider).
-    - [x] Drivetrain losses shown in %.
-    - [x] CdA shown without m² unit.
-    - [x] Sliders on analyse settings (parameters page).
-    - [x] Hide sub-segment parameters.
-    - [x] Hide slope parameters.
-    - [x] Transparent slider background.
+use exact same slider the in plan or anayles and open file settings.
 
-## Next
+remove duplicate code related to "open file" merge.
 
-    - Port the full Plan tab (bike_estimator UI) as a wizard.
+
+
 

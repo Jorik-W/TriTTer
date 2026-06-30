@@ -1,5 +1,9 @@
 """
 Course file parsing and gradient band analysis.
+
+FIT/GPX loading is handled by core/fit_loader.py; this module provides
+the geometry utilities (segment bearings, headwind, gradient bands, etc.)
+and thin compatibility shims for legacy callers.
 """
 
 import os
@@ -10,15 +14,6 @@ from datetime import datetime
 import numpy as np
 
 from physics import solve_speed, estimate_time, RHO
-
-# Semicircles -> degrees (FIT stores lat/lon as int32 semicircles).
-_SEMICIRCLE_TO_DEG = 180.0 / (2 ** 31)
-
-try:
-    from fitparse import FitFile
-    HAS_FITPARSE = True
-except ImportError:
-    HAS_FITPARSE = False
 
 
 def segment_bearings(latitudes, longitudes):
@@ -256,73 +251,9 @@ def _profile_stats_from_distances_and_altitudes(
 
 
 def parse_fit_file(path):
-    """Extract elevation profile and distance from a FIT file."""
-    if not HAS_FITPARSE:
-        return {'valid': False, 'error': 'fitparse not installed'}
-
-    try:
-        fit = FitFile(path)
-        records = []
-        for rec in fit.get_messages('record'):
-            d = {}
-            for field in rec:
-                d[field.name] = field.value
-            records.append(d)
-
-        if not records:
-            return {'valid': False, 'error': 'No record messages found in FIT file'}
-
-        distances = []
-        altitudes = []
-        latitudes = []
-        longitudes = []
-        timestamps = []
-        last_lat = None
-        last_lon = None
-        for r in records:
-            dist = r.get('distance')
-            # Preserve valid 0.0 m values by checking None explicitly.
-            alt = r.get('enhanced_altitude')
-            if alt is None:
-                alt = r.get('altitude')
-            if dist is None or alt is None:
-                continue
-
-            lat_raw = r.get('position_lat')
-            lon_raw = r.get('position_long')
-            if lat_raw is not None and lon_raw is not None:
-                # FIT stores position as int32 semicircles.
-                last_lat = float(lat_raw) * _SEMICIRCLE_TO_DEG
-                last_lon = float(lon_raw) * _SEMICIRCLE_TO_DEG
-
-            distances.append(float(dist))
-            altitudes.append(float(alt))
-            latitudes.append(last_lat)
-            longitudes.append(last_lon)
-            timestamps.append(r.get('timestamp'))
-
-        if len(distances) < 10:
-            return {'valid': False, 'error': 'Not enough GPS data points in FIT file'}
-
-        has_geo = any(v is not None for v in latitudes)
-        if has_geo:
-            # Backfill leading None positions (before first GPS fix) so weather
-            # sampling always has usable coordinates.
-            first_lat = next((v for v in latitudes if v is not None), None)
-            first_lon = next((v for v in longitudes if v is not None), None)
-            latitudes = [v if v is not None else first_lat for v in latitudes]
-            longitudes = [v if v is not None else first_lon for v in longitudes]
-
-        return _profile_stats_from_distances_and_altitudes(
-            distances,
-            altitudes,
-            latitudes=latitudes if has_geo else None,
-            longitudes=longitudes if has_geo else None,
-            timestamps=timestamps,
-        )
-
-    except Exception as e:
-        return {'valid': False, 'error': str(e)}
+    """Compatibility shim — delegates to core/fit_loader."""
+    from fit_loader import load_course_file, course_to_plan_dict
+    return course_to_plan_dict(load_course_file(path))
 
 
 def _parse_gpx_time(text):
@@ -336,68 +267,9 @@ def _parse_gpx_time(text):
 
 
 def parse_gpx_file(path):
-    """Extract elevation profile and distance from a GPX file."""
-    try:
-        root = ET.parse(path).getroot()
-        trackpoints = root.findall('.//{*}trkpt')
-        if len(trackpoints) < 10:
-            return {'valid': False, 'error': 'Not enough track points in GPX file'}
-
-        distances = []
-        altitudes = []
-        latitudes = []
-        longitudes = []
-        timestamps = []
-        prev_lat = None
-        prev_lon = None
-        cumulative_dist = 0.0
-
-        for trkpt in trackpoints:
-            lat = trkpt.get('lat')
-            lon = trkpt.get('lon')
-            ele_el = trkpt.find('{*}ele')
-            if lat is None or lon is None or ele_el is None or ele_el.text is None:
-                continue
-
-            lat = float(lat)
-            lon = float(lon)
-            alt = float(ele_el.text)
-
-            if prev_lat is not None and prev_lon is not None:
-                lat1 = math.radians(prev_lat)
-                lon1 = math.radians(prev_lon)
-                lat2 = math.radians(lat)
-                lon2 = math.radians(lon)
-                dlat = lat2 - lat1
-                dlon = lon2 - lon1
-                a = math.sin(dlat / 2.0) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2.0) ** 2
-                c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(max(1e-12, 1.0 - a)))
-                cumulative_dist += 6371000.0 * c
-
-            time_el = trkpt.find('{*}time')
-            time_val = _parse_gpx_time(time_el.text) if time_el is not None else None
-
-            distances.append(cumulative_dist)
-            altitudes.append(alt)
-            latitudes.append(lat)
-            longitudes.append(lon)
-            timestamps.append(time_val)
-            prev_lat = lat
-            prev_lon = lon
-
-        if len(distances) < 10:
-            return {'valid': False, 'error': 'Not enough usable track points in GPX file'}
-
-        return _profile_stats_from_distances_and_altitudes(
-            distances,
-            altitudes,
-            latitudes=latitudes,
-            longitudes=longitudes,
-            timestamps=timestamps,
-        )
-
-    except Exception as e:
-        return {'valid': False, 'error': str(e)}
+    """Compatibility shim — delegates to core/fit_loader."""
+    from fit_loader import load_course_file, course_to_plan_dict
+    return course_to_plan_dict(load_course_file(path))
 
 
 def parse_course_file(path):

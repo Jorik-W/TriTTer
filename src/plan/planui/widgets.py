@@ -1,148 +1,25 @@
 """
-Reusable UI widgets: MetricCard, SliderRow, ProfileBar, ElevationPlot.
+Plan-specific UI widgets: ProfileBar, ElevationPlot.
+
+MetricCard and SliderRow are imported from the shared ui/widgets module so
+every part of the app uses the exact same slider and card widget.
 """
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QFrame,
-    QDoubleSpinBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
 from planui.constants import ACCENT, CARD, TEXT, MUTED, ORANGE, GREEN, RED_COL
+
+# Re-export shared widgets so existing callers don't need updating.
+from widgets import MetricCard, SliderRow  # noqa: F401  (shared ui/widgets)
 
 try:
     import pyqtgraph as pg
     HAS_PG = True
 except ImportError:
     HAS_PG = False
-
-
-class MetricCard(QFrame):
-    def __init__(self, label, value="—", unit="", accent=False):
-        super().__init__()
-        self.setObjectName("card")
-        self.setFixedHeight(72)
-        self.setStyleSheet(f"QFrame#card {{ background-color: {CARD}; border-radius: 8px; border: 1px solid #3A3A52; }}")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(2)
-        self.lbl = QLabel(label)
-        self.lbl.setStyleSheet(f"background: transparent; color: {MUTED}; font-size: 10px; border: none;")
-        layout.addWidget(self.lbl)
-        color = ACCENT if accent else TEXT
-        self.val = QLabel(value)
-        self.val.setStyleSheet(f"background: transparent; color: {color}; font-size: 20px; font-weight: bold; border: none;")
-        layout.addWidget(self.val)
-        self.unit_lbl = None
-        if unit:
-            self.unit_lbl = QLabel(unit)
-            self.unit_lbl.setStyleSheet(f"background: transparent; color: {MUTED}; font-size: 10px; border: none;")
-            layout.addWidget(self.unit_lbl)
-
-    def update_value(self, value, color=None):
-        self.val.setText(str(value))
-        if color:
-            self.val.setStyleSheet(f"background: transparent; color: {color}; font-size: 20px; font-weight: bold; border: none;")
-
-
-class SliderRow(QWidget):
-    valueChanged = pyqtSignal(float)
-    interactionFinished = pyqtSignal()
-
-    def __init__(self, label, min_val, max_val, default, step, decimals=0, suffix="", parent=None):
-        super().__init__(parent)
-        self.min_val = min_val
-        self.max_val = max_val
-        self.step = step
-        self._decimals = decimals
-        self._steps = round((max_val - min_val) / step)
-        self._updating = False
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        layout.setSpacing(6)
-
-        self._label = QLabel(label)
-        self._label.setFixedWidth(145)
-        self._label.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
-        layout.addWidget(self._label)
-
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setMinimum(0)
-        self.slider.setMaximum(self._steps)
-        self.slider.setValue(self._to_slider(default))
-        self.slider.valueChanged.connect(self._on_slider_change)
-        self.slider.sliderReleased.connect(self.interactionFinished.emit)
-        layout.addWidget(self.slider, 1)
-
-        self.spin = QDoubleSpinBox()
-        self.spin.setRange(min_val, max_val)
-        self.spin.setSingleStep(step)
-        self.spin.setDecimals(decimals)
-        self.spin.setValue(default)
-        if suffix:
-            self.spin.setSuffix(suffix)
-        self.spin.setFixedWidth(100)
-        self.spin.setKeyboardTracking(False)
-        self.spin.setAlignment(Qt.AlignRight)
-        self.spin.valueChanged.connect(self._on_spin_change)
-        self.spin.editingFinished.connect(self.interactionFinished.emit)
-        layout.addWidget(self.spin)
-
-    def _to_slider(self, v):
-        return max(0, min(self._steps, round((v - self.min_val) / self.step)))
-
-    def _to_value(self, s):
-        return self.min_val + s * self.step
-
-    def _on_slider_change(self, slider_val):
-        if self._updating:
-            return
-        self._updating = True
-        v = self._to_value(slider_val)
-        self.spin.blockSignals(True)
-        self.spin.setValue(v)
-        self.spin.blockSignals(False)
-        self._updating = False
-        self.valueChanged.emit(v)
-
-    def _on_spin_change(self, v):
-        if self._updating:
-            return
-        self._updating = True
-        v = max(self.min_val, min(self.max_val, v))
-        v = self.min_val + round((v - self.min_val) / self.step) * self.step
-        v = round(v, self._decimals)
-        self.spin.blockSignals(True)
-        self.spin.setValue(v)
-        self.spin.blockSignals(False)
-        self.slider.blockSignals(True)
-        self.slider.setValue(self._to_slider(v))
-        self.slider.blockSignals(False)
-        self._updating = False
-        self.valueChanged.emit(v)
-
-    def value(self):
-        return self.spin.value()
-
-    def set_value(self, v, silent=False):
-        was = self._updating
-        self._updating = True
-        v = max(self.min_val, min(self.max_val, v))
-        self.spin.blockSignals(True)
-        self.spin.setValue(v)
-        self.spin.blockSignals(False)
-        self.slider.blockSignals(True)
-        self.slider.setValue(self._to_slider(v))
-        self.slider.blockSignals(False)
-        self._updating = was
-        if not silent:
-            self.valueChanged.emit(v)
-
-    def setEnabled(self, enabled):
-        super().setEnabled(enabled)
-        self.slider.setEnabled(enabled)
-        self.spin.setEnabled(enabled)
 
 
 class ProfileBar(QWidget):
