@@ -72,10 +72,10 @@ class ProfileTab(QWidget):
         form.addRow("CdA (measured / manual)", self.f_cda)
         self.f_climb_cda = self._spin(0.10, 0.70, 0.001, "", 3)
         form.addRow("Climbing CdA", self.f_climb_cda)
-        self.f_wind = self._spin(0.0, 1.0, 0.01, "", 2)
-        form.addRow("Wind effect factor", self.f_wind)
         self.f_ftp = self._spin(80, 600, 1, " W", 0)
         form.addRow("FTP", self.f_ftp)
+        self.f_max_power = self._spin(100, 2000, 1, " W", 0)
+        form.addRow("Max power", self.f_max_power)
 
         self.f_notes = QPlainTextEdit()
         self.f_notes.setFixedHeight(60)
@@ -121,8 +121,8 @@ class ProfileTab(QWidget):
         self.f_dtloss.setValue(rider.drivetrain_loss * 100.0)
         self.f_cda.setValue(rider.cda)
         self.f_climb_cda.setValue(rider.climbing_cda)
-        self.f_wind.setValue(rider.wind_effect_factor)
         self.f_ftp.setValue(rider.ftp)
+        self.f_max_power.setValue(getattr(rider, 'max_power', 400.0))
         self.f_notes.setPlainText(rider.notes)
         self._loading = False
 
@@ -135,8 +135,8 @@ class ProfileTab(QWidget):
             drivetrain_loss=self.f_dtloss.value() / 100.0,
             cda=self.f_cda.value(),
             climbing_cda=self.f_climb_cda.value(),
-            wind_effect_factor=self.f_wind.value(),
             ftp=self.f_ftp.value(),
+            max_power=self.f_max_power.value(),
             notes=self.f_notes.toPlainText().strip(),
         )
 

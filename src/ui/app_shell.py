@@ -1,12 +1,7 @@
-"""TriTTer main window: three top-level tabs (Profile / Analyze / Plan).
+"""TriTTer main window: five top-level tabs.
 
-The shell hosts:
-  * Profile  - rider profiles (single source of truth).
-  * Analyze  - the CdA analyzer (recorded ride -> CdA), embedded as-is.
-  * Plan     - pacing/time estimator (ported in the next phase; placeholder now).
-
-Rider selection is shared: choosing a rider in either Profile or Analyze keeps
-the others in sync, and a measured CdA can be written back to the active profile.
+Tab order: (Open File) | Weather | Profile | Analyse | Plan
+Open File tab is added in Phase 3; Weather is added here in Phase 2.
 """
 
 from PyQt5.QtWidgets import (
@@ -18,6 +13,7 @@ from PyQt5.QtGui import QFont
 
 from profiles import ProfileStore
 from profile_tab import ProfileTab
+from weather_tab import WeatherTab
 from qt_gui import GUIInterface
 from plan_gui import PlanTab
 
@@ -35,27 +31,32 @@ class TriTTerWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        # About button pushed to the far right of the tab bar.
+        # About button at the far right of the tab bar.
         about_btn = QPushButton("  About  ")
         about_btn.setObjectName("secondary")
         about_btn.setToolTip("About TriTTer")
         about_btn.clicked.connect(self._show_about)
         self.tabs.setCornerWidget(about_btn, Qt.TopRightCorner)
 
+        # --- Weather tab (Phase 2) ---
+        self.weather_tab = WeatherTab()
+        self.weather_tab.weatherChanged.connect(self._on_weather_changed)
+        self.tabs.addTab(self.weather_tab, "Weather")
+
         # --- Profile tab ---
         self.profile_tab = ProfileTab(self.store)
         self.profile_tab.riderChanged.connect(self._on_profile_rider_changed)
         self.tabs.addTab(self.profile_tab, "Profile")
 
-        # --- Analyze tab (embed existing GUIInterface) ---
+        # --- Analyse tab ---
         self.analyze_gui = GUIInterface(app)
-        self.tabs.addTab(self._build_analyze_page(), "Analyze")
+        self.tabs.addTab(self._build_analyze_page(), "Analyse")
 
-        # --- Plan tab (ported bike_estimator pacing window) ---
+        # --- Plan tab ---
         self.plan_gui = PlanTab()
         self.tabs.addTab(self._build_plan_page(), "Plan")
 
-        # Apply the initially selected rider to Analyze.
+        # Apply the initially selected rider.
         self._apply_rider(self.store.get_selected())
 
         self.raise_()
@@ -104,6 +105,25 @@ class TriTTerWindow(QMainWindow):
 
         layout.addWidget(self.plan_gui)
         return page
+
+    # ---- weather changes ----------------------------------------------
+    def _on_weather_changed(self, cfg: dict):
+        if cfg.get("_request_fetch"):
+            # Shell handles the actual fetch in Phase 3 (needs file geometry).
+            self.weather_tab.show_fetch_result({}, error="Load a file first to fetch weather.")
+            return
+        wef = cfg.get("wind_effect_factor", 0.40)
+        if cfg.get("applies_analyse", True):
+            try:
+                self.analyze_gui.update_parameters({"wind_effect_factor": wef})
+            except Exception:
+                pass
+        if cfg.get("applies_plan", True):
+            try:
+                self.plan_gui._weather_wef = wef
+                self.plan_gui._recalculate()
+            except Exception:
+                pass
 
     # ---- rider sync ---------------------------------------------------
     def _apply_rider(self, rider):

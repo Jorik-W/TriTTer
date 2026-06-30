@@ -339,6 +339,7 @@ class BikeEstimator(QMainWindow):
         self._last_course_path = None
         self._adb_threads = {}
         self._adb_request_id = 0
+        self._weather_wef = 0.40   # wind effect factor, updated by WeatherTab via shell
         self._debounce_timer = QTimer()
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.timeout.connect(self._on_debounce_timeout)
@@ -641,7 +642,7 @@ class BikeEstimator(QMainWindow):
         root.addWidget(splitter)
 
     def _get_params(self):
-        return {
+        params = {
             'dist_km':          self.s_dist.value(),
             'elev_m':           self.s_elev.value(),
             'avg_power':        self.s_avgp.value(),
@@ -655,7 +656,9 @@ class BikeEstimator(QMainWindow):
             'climb_grad':       self.s_grad.value(),
             'desc_grad':        self.s_dgrad.value(),
             'desc_speed_cap':   self.s_vcap.value(),
+            'wind_effect_factor': getattr(self, '_weather_wef', 0.40),
         }
+        return params
 
     def apply_rider(self, rider):
         """Sync the selected rider profile into the Plan inputs."""

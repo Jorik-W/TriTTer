@@ -31,8 +31,8 @@ class Rider:
     drivetrain_loss: float = 0.025     # fraction (1 - efficiency)
     cda: float = 0.30                  # m^2 (measured in Analyze or manual)
     climbing_cda: float = 0.32         # m^2 (used by Plan on climbs)
-    wind_effect_factor: float = 0.40   # 0.0 - 1.0 (Analyze yaw model)
-    ftp: float = 250.0                 # W (used by Plan)
+    ftp: float = 250.0                 # W
+    max_power: float = 400.0           # W (used by Plan durability model)
     notes: str = ""
 
     @property
@@ -50,11 +50,10 @@ class Rider:
             "bike_mass": float(self.bike_mass),
             "rolling_resistance": float(self.rolling_resistance),
             "drivetrain_loss": float(self.drivetrain_loss),
-            "wind_effect_factor": float(self.wind_effect_factor),
         }
 
     def to_plan_overrides(self):
-        """Rider params used by the Plan (pacing) side. Used in the next phase."""
+        """Rider params used by the Plan (pacing) side."""
         return {
             "cda": float(self.cda),
             "climbing_cda": float(self.climbing_cda),
@@ -62,22 +61,23 @@ class Rider:
             "crr": float(self.rolling_resistance),
             "eff": float(self.efficiency),
             "ftp": float(self.ftp),
+            "max_power": float(self.max_power),
         }
 
 
 # Seed riders from the measured CdA data documented in cda_analyzer/config.py.
 _SEED_RIDERS = [
     Rider(name="Jorik", rider_mass=75.0, bike_mass=10.0, rolling_resistance=0.005,
-          wind_effect_factor=0.07, cda=0.290, climbing_cda=0.31, ftp=309.0,
+          cda=0.290, climbing_cda=0.31, ftp=309.0, max_power=520.0,
           notes="Seeded from measured rides (Eeklo/Damme/Lievegem)."),
     Rider(name="Sam", rider_mass=68.0, bike_mass=9.0, rolling_resistance=0.0035,
-          wind_effect_factor=0.07, cda=0.2515, climbing_cda=0.27, ftp=280.0,
+          cda=0.2515, climbing_cda=0.27, ftp=280.0, max_power=450.0,
           notes="Seeded from Eeklo 2025 analysis."),
     Rider(name="Xiano", rider_mass=68.0, bike_mass=9.0, rolling_resistance=0.0035,
-          wind_effect_factor=0.10, cda=0.2241, climbing_cda=0.24, ftp=280.0,
+          cda=0.2241, climbing_cda=0.24, ftp=280.0, max_power=450.0,
           notes="Seeded from Eeklo 2025 analysis."),
     Rider(name="Lars", rider_mass=77.0, bike_mass=10.0, rolling_resistance=0.0038,
-          wind_effect_factor=0.05, cda=0.317, climbing_cda=0.34, ftp=300.0,
+          cda=0.317, climbing_cda=0.34, ftp=300.0, max_power=500.0,
           notes="Seeded from Kapelle/Damme/Lievegem analysis."),
 ]
 
