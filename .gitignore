@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# App data (user profiles live in ~/.tritter, not the repo)
+*.log

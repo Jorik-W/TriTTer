@@ -1,0 +1,13 @@
+# TriTTer requirements (merged: cda_analyzer + bike_estimator)
+fitparse==1.2.0
+folium==0.20.0
+geopy==2.4.1
+matplotlib==3.10.5
+numpy>=1.21
+pandas>=2.3.3
+Pillow==11.3.0
+PyQt5==5.15.11
+PyQt5_sip>=12.15
+PyQtWebEngine==5.15.6
+pyqtgraph>=0.13.0
+requests>=2.28
