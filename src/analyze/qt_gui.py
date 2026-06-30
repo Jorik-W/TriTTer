@@ -429,7 +429,10 @@ class GUIInterface(QMainWindow):
             entry = getattr(self, "param_entries", {}).get(key)
             if entry is not None:
                 try:
-                    entry.set_value(float(value), silent=True)
+                    disp = (float(value) * 100.0
+                            if key in getattr(self, '_param_percent_keys', set())
+                            else float(value))
+                    entry.set_value(disp, silent=True)
                 except (TypeError, ValueError):
                     pass
         # Rebuild analyzer with the new rider parameters.
@@ -595,7 +598,7 @@ class GUIInterface(QMainWindow):
             'rider_mass':              (40.0, 120.0, 0.5, 1, " kg"),
             'bike_mass':               (4.0, 20.0, 0.1, 1, " kg"),
             'rolling_resistance':      (0.001, 0.020, 0.0005, 4, ""),
-            'drivetrain_loss':         (0.0, 0.10, 0.005, 3, ""),
+            'drivetrain_loss':         (0.0, 10.0, 0.1, 1, " %"),
             'min_segment_length':      (10, 1000, 10, 0, " m"),
             'min_duration':            (5, 120, 5, 0, " s"),
             'min_speed':               (0.0, 20.0, 0.1, 1, " m/s"),
@@ -622,10 +625,18 @@ class GUIInterface(QMainWindow):
 
         self.param_entries = {}
         self.param_checkboxes = {}
-        hidden_parameter_keys = {'weather_sample_distance_m', 'elevation_source'}
+        # Parameters displayed as a percentage but stored as a fraction.
+        self._param_percent_keys = {'drivetrain_loss'}
+        # Advanced parameters hidden from the user page.
+        hidden_parameter_keys = {
+            'weather_sample_distance_m', 'elevation_source',
+            'wind_effect_factor',                  # controlled from the Results wind slider
+            'subsegment_min_duration_s', 'subsegment_min_points',  # advanced sub-segment
+            'slope_steady_threshold', 'max_slope_variation',       # slope parameters
+        }
 
         for group_title, keys in param_groups:
-            scroll_layout.addWidget(SectionHeader(group_title))
+            rows = []
             for key in keys:
                 if key not in self.parameters or key in hidden_parameter_keys:
                     continue
@@ -633,11 +644,16 @@ class GUIInterface(QMainWindow):
                 if isinstance(value, bool):
                     continue
                 lo, hi, step, dec, suffix = param_meta[key]
+                disp = float(value) * 100.0 if key in self._param_percent_keys else float(value)
                 row = SliderRow(key.replace('_', ' ').title(), lo, hi,
-                                float(value), step, decimals=dec, suffix=suffix,
+                                disp, step, decimals=dec, suffix=suffix,
                                 label_width=200)
                 self.param_entries[key] = row
-                scroll_layout.addWidget(row)
+                rows.append(row)
+            if rows:
+                scroll_layout.addWidget(SectionHeader(group_title))
+                for row in rows:
+                    scroll_layout.addWidget(row)
 
         # Boolean parameters (e.g. use_weather_api) as checkboxes.
         bool_keys = [k for k, v in self.parameters.items()
@@ -1181,6 +1197,8 @@ class GUIInterface(QMainWindow):
         try:
             for key, entry in self.param_entries.items():
                 value = entry.value()
+                if key in getattr(self, '_param_percent_keys', set()):
+                    value = value / 100.0
                 orig = DEFAULT_PARAMETERS[key]
                 if isinstance(orig, int):
                     self.parameters[key] = int(round(value))

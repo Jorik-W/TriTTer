@@ -47,7 +47,8 @@ QLabel {{
 }}
 QSlider::groove:horizontal {{
     height: 6px;
-    background: {BORDER};
+    background: transparent;
+    border: 1px solid {BORDER};
     border-radius: 3px;
 }}
 QSlider::handle:horizontal {{

@@ -34,6 +34,13 @@ class TriTTerWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
+        # About button pushed to the far right of the tab bar.
+        about_btn = QPushButton("  About  ")
+        about_btn.setObjectName("secondary")
+        about_btn.setToolTip("About TriTTer")
+        about_btn.clicked.connect(self._show_about)
+        self.tabs.setCornerWidget(about_btn, Qt.TopRightCorner)
+
         # --- Profile tab ---
         self.profile_tab = ProfileTab(self.store)
         self.profile_tab.riderChanged.connect(self._on_profile_rider_changed)
@@ -133,5 +140,12 @@ class TriTTerWindow(QMainWindow):
         self.profile_tab.set_cda_from_measurement(cda)
         QMessageBox.information(
             self, "Saved",
-            f"Saved measured CdA {float(cda):.4f} m\u00b2 to rider '{self.store.selected}'.",
+            f"Saved measured CdA {float(cda):.4f} to rider '{self.store.selected}'.",
         )
+
+    def _show_about(self):
+        try:
+            self.analyze_gui._show_about_dialog()
+        except Exception:
+            QMessageBox.information(self, "About TriTTer",
+                                    "TriTTer \u2014 unified cycling analysis & pacing.")

@@ -66,11 +66,11 @@ class ProfileTab(QWidget):
         form.addRow("Bike mass", self.f_bike_mass)
         self.f_crr = self._spin(0.0, 0.02, 0.0001, "", 4)
         form.addRow("Rolling resistance (Crr)", self.f_crr)
-        self.f_dtloss = self._spin(0.0, 0.10, 0.001, "", 3)
+        self.f_dtloss = self._spin(0.0, 10.0, 0.1, " %", 1)
         form.addRow("Drivetrain loss", self.f_dtloss)
-        self.f_cda = self._spin(0.10, 0.60, 0.001, " m\u00b2", 3)
+        self.f_cda = self._spin(0.10, 0.60, 0.001, "", 3)
         form.addRow("CdA (measured / manual)", self.f_cda)
-        self.f_climb_cda = self._spin(0.10, 0.70, 0.001, " m\u00b2", 3)
+        self.f_climb_cda = self._spin(0.10, 0.70, 0.001, "", 3)
         form.addRow("Climbing CdA", self.f_climb_cda)
         self.f_wind = self._spin(0.0, 1.0, 0.01, "", 2)
         form.addRow("Wind effect factor", self.f_wind)
@@ -118,7 +118,7 @@ class ProfileTab(QWidget):
         self.f_rider_mass.setValue(rider.rider_mass)
         self.f_bike_mass.setValue(rider.bike_mass)
         self.f_crr.setValue(rider.rolling_resistance)
-        self.f_dtloss.setValue(rider.drivetrain_loss)
+        self.f_dtloss.setValue(rider.drivetrain_loss * 100.0)
         self.f_cda.setValue(rider.cda)
         self.f_climb_cda.setValue(rider.climbing_cda)
         self.f_wind.setValue(rider.wind_effect_factor)
@@ -132,7 +132,7 @@ class ProfileTab(QWidget):
             rider_mass=self.f_rider_mass.value(),
             bike_mass=self.f_bike_mass.value(),
             rolling_resistance=self.f_crr.value(),
-            drivetrain_loss=self.f_dtloss.value(),
+            drivetrain_loss=self.f_dtloss.value() / 100.0,
             cda=self.f_cda.value(),
             climbing_cda=self.f_climb_cda.value(),
             wind_effect_factor=self.f_wind.value(),

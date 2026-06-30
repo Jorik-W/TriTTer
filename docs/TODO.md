@@ -2,11 +2,13 @@
 
 ## GUI
 
-- Make the GUI uniform across all tabs (consistent look, spacing, and behavior).
-- Split the GUI further: ideally **one `.py` file per step / page / tab**.
-- Combine the two styles:
-  - Keep the **compactness** of `cda_analyzer`.
-  - Keep the **flat style** of `bike_estimator`.
-- For every input, add a **slider + input box pair** (like `bike_estimator`), but in a
-  **more compact layout** (like `cda_analyzer`).
-- Provide a **step-wise walkthrough** of the settings (guided, sequential configuration).
+    - Modern titlebar with tabs implemented. Space out about tab full at the right side.
+    - Remove wind effect factor from user page. 
+    - drivetrain losses in % 
+    - cda is not in m² do not use unit here.
+    -Add slider to analyse settings.
+    -Hide subsegement parameters
+    -hide slope parameters.
+    - transparent slider background.
+
+    
