@@ -41,8 +41,8 @@ from analyzer import CDAAnalyzer
 from weather import WeatherService
 from elevation import ElevationService, OpenMeteoElevationService
 from config import DEFAULT_PARAMETERS
-from wizard import WizardFrame
 from widgets import SliderRow, SectionHeader
+from theme import MUTED, TEXT, ACCENT, GREEN, ORANGE, RED_COL, BORDER, SURFACE, CARD
 
 _CRASH_APP = None
 _CRASH_LOG_PATH = Path.cwd() / "cda_analyzer_crash.log"
@@ -395,20 +395,367 @@ class GUIInterface(QMainWindow):
         self.activateWindow()
 
     def _setup_ui(self):
-        """Setup the user interface with PyQt5"""
+        """Setup the user interface — single-page layout (no wizard)."""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
 
-        # Step-by-step wizard (drop-in QTabWidget replacement with a step rail).
-        self.tabs = WizardFrame()
-        layout.addWidget(self.tabs)
+        # ── Hidden compatibility refs (existing code writes to these) ────
+        self.file_status = QTextEdit()       # invisible sink – _load_fit_file logs here
+        self.file_frame  = QWidget()
+        self.file_label  = QLabel()
+        self.parameters_frame = QWidget()
+        self.results_frame    = QWidget()
+        self.simulation_frame = QWidget()
 
-        self._setup_file_tab()
-        self._setup_parameters_tab()
-        self._setup_results_tab()
-        self._setup_simulation_tab()
+        # File-load API checkboxes (not shown; defaults read in _load_fit_file)
+        self.load_weather_api_checkbox = QCheckBox()
+        self.load_weather_api_checkbox.setChecked(True)
+        self.load_open_elevation_checkbox = QCheckBox()
+        self.load_open_elevation_checkbox.setChecked(True)
+        self.load_open_meteo_checkbox = QCheckBox()
+        self.load_open_meteo_checkbox.setChecked(False)
+
+        # Wind-effect slider (not shown; _save_parameters reads/writes it)
+        self.wind_effect_slider = QSlider(Qt.Horizontal)
+        self.wind_effect_slider.setRange(0, 100)
+        self.wind_effect_slider.setValue(
+            int(self.analyzer.parameters.get('wind_effect_factor', 0.40) * 100))
+        self.wind_effect_slider.valueChanged.connect(self._on_wind_effect_slider_moved)
+        self.wind_effect_slider.sliderReleased.connect(self._on_wind_effect_changed)
+        self.wind_effect_value_label = QLabel()
+
+        # ── Top action bar ────────────────────────────────────────────────
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(8)
+
+        run_btn = QPushButton("▶  Run Analysis")
+        run_btn.setFixedWidth(130)
+        run_btn.clicked.connect(self._run_analysis)
+        top_bar.addWidget(run_btn)
+
+        self.progress = CustomProgress()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setAlignment(Qt.AlignCenter)
+        top_bar.addWidget(self.progress, 1)
+
+        self.analysis_status = QLabel("Ready to analyse")
+        self.analysis_status.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
+        top_bar.addWidget(self.analysis_status)
+
+        about_btn = QPushButton("?")
+        about_btn.setFixedSize(25, 25)
+        about_btn.setToolTip("About this program")
+        about_btn.clicked.connect(self._show_about_dialog)
+        top_bar.addWidget(about_btn)
+        layout.addLayout(top_bar)
+
+        # ── Collapsible Advanced settings strip ───────────────────────────
+        self._adv_toggle = QPushButton("▶  Advanced settings")
+        self._adv_toggle.setObjectName("secondary")
+        self._adv_toggle.setCheckable(True)
+        self._adv_toggle.setChecked(False)
+        self._adv_toggle.toggled.connect(self._toggle_advanced)
+        layout.addWidget(self._adv_toggle)
+
+        self._adv_widget = QWidget()
+        self._adv_widget.setVisible(False)
+        adv_layout = QVBoxLayout(self._adv_widget)
+        adv_layout.setContentsMargins(4, 4, 4, 4)
+        adv_layout.setSpacing(4)
+        self._build_advanced_params(adv_layout)
+        layout.addWidget(self._adv_widget)
+
+        # ── Results notebook ──────────────────────────────────────────────
+        self.results_notebook = QTabWidget()
+        layout.addWidget(self.results_notebook, 1)
+
+        self._build_summary_tab()
+        self._build_map_tab()
+        self._build_plots_tab()
+        self._build_simulation_tab()
+
+    # ---- Advanced params ------------------------------------------------
+    def _build_advanced_params(self, adv_layout):
+        """Build the collapsible Advanced settings strip."""
+        # (min, max, step, decimals, suffix) per numeric parameter.
+        param_meta = {
+            'rider_mass':              (40.0, 120.0, 0.5, 1, " kg"),
+            'bike_mass':               (4.0, 20.0, 0.1, 1, " kg"),
+            'rolling_resistance':      (0.001, 0.020, 0.0005, 4, ""),
+            'drivetrain_loss':         (0.0, 10.0, 0.1, 1, " %"),
+            'min_segment_length':      (10, 1000, 10, 0, " m"),
+            'min_duration':            (5, 120, 5, 0, " s"),
+            'min_speed':               (0.0, 20.0, 0.1, 1, " m/s"),
+            'max_speed':               (5.0, 30.0, 0.1, 1, " m/s"),
+            'max_slope_variation':     (0.0, 30.0, 0.5, 1, " \u00b0"),
+            'speed_steady_threshold':  (0.0, 2.0, 0.05, 2, " m/s"),
+            'power_steady_threshold':  (0.0, 500.0, 10.0, 0, " W"),
+            'slope_steady_threshold':  (0.0, 20.0, 0.5, 1, " \u00b0"),
+            'cda_keep_percent':        (10.0, 100.0, 5.0, 0, " %"),
+            'subsegment_min_duration_s': (1.0, 30.0, 1.0, 0, " s"),
+            'subsegment_min_points':   (3, 50, 1, 0, ""),
+            'wind_effect_factor':      (0.0, 1.0, 0.01, 2, ""),
+        }
+
+        # Rider/bike sliders exist in param_entries for apply_rider but are not
+        # added to any visible layout.
+        rider_keys  = {'rider_mass', 'bike_mass', 'rolling_resistance', 'drivetrain_loss'}
+        # Advanced params shown in the collapsible strip.
+        adv_groups = [
+            ("Segment detection", ['min_segment_length', 'min_duration',
+                                    'min_speed', 'max_speed']),
+            ("Steady-state thresholds", ['speed_steady_threshold',
+                                          'power_steady_threshold']),
+            ("CdA filtering", ['cda_keep_percent']),
+        ]
+        hidden_always = {
+            'weather_sample_distance_m', 'elevation_source', 'wind_effect_factor',
+            'subsegment_min_duration_s', 'subsegment_min_points',
+            'slope_steady_threshold', 'max_slope_variation',
+        }
+
+        self.param_entries   = {}
+        self.param_checkboxes = {}
+        self._param_percent_keys = {'drivetrain_loss'}
+
+        # Create rider/bike SliderRows (hidden – for apply_rider / _save_parameters)
+        for key in rider_keys:
+            if key not in self.parameters or isinstance(self.parameters[key], bool):
+                continue
+            lo, hi, step, dec, suffix = param_meta[key]
+            disp = float(self.parameters[key]) * 100.0 if key in self._param_percent_keys else float(self.parameters[key])
+            self.param_entries[key] = SliderRow(
+                key.replace('_', ' ').title(), lo, hi, disp, step,
+                decimals=dec, suffix=suffix, label_width=200)
+
+        # Create and add visible advanced SliderRows
+        for group_title, keys in adv_groups:
+            rows = []
+            for key in keys:
+                if key not in self.parameters or key in hidden_always or isinstance(self.parameters[key], bool):
+                    continue
+                lo, hi, step, dec, suffix = param_meta[key]
+                disp = float(self.parameters[key]) * 100.0 if key in self._param_percent_keys else float(self.parameters[key])
+                row = SliderRow(key.replace('_', ' ').title(), lo, hi,
+                                disp, step, decimals=dec, suffix=suffix,
+                                label_width=200)
+                self.param_entries[key] = row
+                rows.append(row)
+            if rows:
+                adv_layout.addWidget(SectionHeader(group_title))
+                for row in rows:
+                    adv_layout.addWidget(row)
+
+        # Boolean parameters as checkboxes
+        bool_keys = [k for k, v in self.parameters.items()
+                     if isinstance(v, bool) and k not in hidden_always]
+        if bool_keys:
+            adv_layout.addWidget(SectionHeader("Toggles"))
+            for key in bool_keys:
+                row = QHBoxLayout()
+                row.setContentsMargins(0, 2, 0, 2)
+                lbl = QLabel(key.replace('_', ' ').title())
+                lbl.setFixedWidth(200)
+                cb = QCheckBox()
+                cb.setChecked(bool(self.parameters[key]))
+                self.param_checkboxes[key] = cb
+                row.addWidget(lbl)
+                row.addWidget(cb)
+                row.addStretch()
+                adv_layout.addLayout(row)
+
+        # Elevation source radio buttons
+        adv_layout.addWidget(SectionHeader("Elevation source (analysis)"))
+        elev_row = QHBoxLayout()
+        elev_row.setSpacing(10)
+        elev_lbl = QLabel("Elevation Source:")
+        elev_lbl.setFixedWidth(200)
+        elev_row.addWidget(elev_lbl)
+
+        self.analysis_elevation_source_group = QButtonGroup(self)
+        self.analysis_open_elevation_radio = QRadioButton("Open-Elevation")
+        self.analysis_open_meteo_radio      = QRadioButton("Open-Meteo")
+        self.analysis_fit_radio             = QRadioButton("FIT elevation")
+
+        self.analysis_elevation_source_group.addButton(self.analysis_open_elevation_radio, 0)
+        self.analysis_elevation_source_group.addButton(self.analysis_open_meteo_radio,      1)
+        self.analysis_elevation_source_group.addButton(self.analysis_fit_radio,             2)
+
+        src = str(self.parameters.get('elevation_source', 'open_elevation'))
+        if src == 'open_meteo':
+            self.analysis_open_meteo_radio.setChecked(True)
+        elif src == 'fit_only':
+            self.analysis_fit_radio.setChecked(True)
+        else:
+            self.analysis_open_elevation_radio.setChecked(True)
+
+        elev_row.addWidget(self.analysis_open_elevation_radio)
+        elev_row.addWidget(self.analysis_open_meteo_radio)
+        elev_row.addWidget(self.analysis_fit_radio)
+        elev_row.addStretch()
+        adv_layout.addLayout(elev_row)
+
+    def _toggle_advanced(self, checked: bool):
+        self._adv_widget.setVisible(checked)
+        self._adv_toggle.setText(
+            "▼  Advanced settings" if checked else "▶  Advanced settings")
+
+    # ---- Result sub-tabs ------------------------------------------------
+    def _build_summary_tab(self):
+        self.summary_frame = QWidget()
+        layout = QVBoxLayout(self.summary_frame)
+        self.summary_text = QTextEdit()
+        self.summary_text.setReadOnly(True)
+        self.summary_text.append("Run analysis to see results here")
+        layout.addWidget(self.summary_text)
+        self.results_notebook.addTab(self.summary_frame, "Summary")
+
+    def _build_map_tab(self):
+        self.map_frame  = QWidget()
+        map_layout = QVBoxLayout(self.map_frame)
+        self.map_webview = QWebEngineView()
+        self.map_webview.setMinimumHeight(400)
+        self.map_webview.settings().setAttribute(
+            QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        map_layout.addWidget(self.map_webview)
+        self.map_refresh_btn = QPushButton("Generate / Refresh Map")
+        self.map_refresh_btn.clicked.connect(self._generate_map)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(self.map_refresh_btn)
+        btn_row.addStretch()
+        map_layout.addLayout(btn_row)
+        self.results_notebook.addTab(self.map_frame, "Map")
+
+    def _build_plots_tab(self):
+        self.plot_frame  = QWidget()
+        plot_layout = QVBoxLayout(self.plot_frame)
+        self.plot_label = QLabel("Plots will be displayed here after analysis")
+        self.plot_label.setAlignment(Qt.AlignCenter)
+        plot_layout.addWidget(self.plot_label)
+        self.plot_button = QPushButton("Generate Plots")
+        self.plot_button.clicked.connect(self._generate_plots)
+        plot_layout.addWidget(self.plot_button)
+        self.results_notebook.addTab(self.plot_frame, "Plots")
+
+    def _build_simulation_tab(self):
+        """Build the Weather Simulation tab inside the results notebook."""
+        sim_outer = QWidget()
+        outer_layout = QVBoxLayout(sim_outer)
+        outer_layout.setContentsMargins(6, 6, 6, 6)
+        outer_layout.setSpacing(6)
+
+        # ── Controls ─────────────────────────────────────────────────────
+        controls_layout = QVBoxLayout()
+        controls_layout.setSpacing(4)
+
+        # Wind speed
+        self.sim_wind_speed_slider = QSlider(Qt.Horizontal)
+        self.sim_wind_speed_slider.setMinimum(0)
+        self.sim_wind_speed_slider.setMaximum(200)
+        self.sim_wind_speed_slider.setValue(0)
+        self.sim_wind_speed_slider.setTickPosition(QSlider.TicksBelow)
+        self.sim_wind_speed_slider.setTickInterval(20)
+        self.sim_wind_speed_slider.valueChanged.connect(self._on_simulation_params_changed)
+        self.sim_wind_speed_value = QLabel("0.0")
+        self.sim_wind_speed_value.setFixedWidth(50)
+
+        spd_row = QHBoxLayout()
+        spd_lbl = QLabel("Wind Speed (m/s):")
+        spd_lbl.setFixedWidth(150)
+        spd_row.addWidget(spd_lbl)
+        spd_row.addWidget(self.sim_wind_speed_slider)
+        spd_row.addWidget(self.sim_wind_speed_value)
+        controls_layout.addLayout(spd_row)
+
+        # Wind angle
+        self.sim_wind_angle_slider = QSlider(Qt.Horizontal)
+        self.sim_wind_angle_slider.setMinimum(-180)
+        self.sim_wind_angle_slider.setMaximum(180)
+        self.sim_wind_angle_slider.setValue(0)
+        self.sim_wind_angle_slider.setTickPosition(QSlider.TicksBelow)
+        self.sim_wind_angle_slider.setTickInterval(45)
+        self.sim_wind_angle_slider.valueChanged.connect(self._on_simulation_params_changed)
+        self.sim_wind_angle_value = QLabel("0")
+        self.sim_wind_angle_value.setFixedWidth(50)
+
+        ang_row = QHBoxLayout()
+        ang_lbl = QLabel("Wind Angle (°):")
+        ang_lbl.setFixedWidth(150)
+        ang_row.addWidget(ang_lbl)
+        ang_row.addWidget(self.sim_wind_angle_slider)
+        ang_row.addWidget(self.sim_wind_angle_value)
+        controls_layout.addLayout(ang_row)
+
+        # Wind effect factor
+        self.sim_wind_factor_slider = QSlider(Qt.Horizontal)
+        self.sim_wind_factor_slider.setMinimum(0)
+        self.sim_wind_factor_slider.setMaximum(100)
+        self.sim_wind_factor_slider.setValue(
+            int(self.analyzer.parameters.get('wind_effect_factor', 0.40) * 100))
+        self.sim_wind_factor_slider.setTickPosition(QSlider.TicksBelow)
+        self.sim_wind_factor_slider.setTickInterval(10)
+        self.sim_wind_factor_slider.valueChanged.connect(self._on_simulation_params_changed)
+        self.sim_wind_factor_value = QLabel(
+            f"{self.analyzer.parameters.get('wind_effect_factor', 0.40):.2f}")
+        self.sim_wind_factor_value.setFixedWidth(50)
+
+        fac_row = QHBoxLayout()
+        fac_lbl = QLabel("Wind Effect Factor:")
+        fac_lbl.setFixedWidth(150)
+        fac_row.addWidget(fac_lbl)
+        fac_row.addWidget(self.sim_wind_factor_slider)
+        fac_row.addWidget(self.sim_wind_factor_value)
+        controls_layout.addLayout(fac_row)
+
+        # Temperature & pressure
+        cond_row = QHBoxLayout()
+        temp_lbl = QLabel("Temperature (°C):")
+        temp_lbl.setFixedWidth(150)
+        self.sim_temp_entry = QLineEdit("15.0")
+        self.sim_temp_entry.setFixedWidth(80)
+        press_lbl = QLabel("Air Pressure (hPa):")
+        press_lbl.setFixedWidth(150)
+        self.sim_pressure_entry = QLineEdit("1013.25")
+        self.sim_pressure_entry.setFixedWidth(80)
+        cond_row.addWidget(temp_lbl)
+        cond_row.addWidget(self.sim_temp_entry)
+        cond_row.addSpacing(16)
+        cond_row.addWidget(press_lbl)
+        cond_row.addWidget(self.sim_pressure_entry)
+        cond_row.addStretch()
+        controls_layout.addLayout(cond_row)
+
+        simulate_btn = QPushButton("Run Simulation")
+        simulate_btn.clicked.connect(self._run_simulation)
+        controls_layout.addWidget(simulate_btn)
+
+        outer_layout.addLayout(controls_layout)
+
+        # ── Simulation results sub-tabs ──────────────────────────────────
+        self.simulation_notebook = QTabWidget()
+        outer_layout.addWidget(self.simulation_notebook, 1)
+
+        self.sim_summary_frame = QWidget()
+        sim_sum_layout = QVBoxLayout(self.sim_summary_frame)
+        self.sim_summary_text = QTextEdit()
+        self.sim_summary_text.setReadOnly(True)
+        self.sim_summary_text.append("Run simulation to see results here")
+        sim_sum_layout.addWidget(self.sim_summary_text)
+        self.simulation_notebook.addTab(self.sim_summary_frame, "Summary")
+
+        self.sim_plot_frame = QWidget()
+        sim_plot_layout = QVBoxLayout(self.sim_plot_frame)
+        self.sim_plot_label = QLabel("Plots will be displayed here after simulation")
+        self.sim_plot_label.setAlignment(Qt.AlignCenter)
+        sim_plot_layout.addWidget(self.sim_plot_label)
+        self.simulation_notebook.addTab(self.sim_plot_frame, "Plots")
+
+        self.results_notebook.addTab(sim_outer, "Simulation")
 
     def load_file(self, path: str):
         """Load a file into the Analyse pipeline (called from the Open File tab).
@@ -521,450 +868,6 @@ class GUIInterface(QMainWindow):
         layout.addWidget(ok_btn, alignment=Qt.AlignCenter)
 
         dialog.exec_()
-
-    def _setup_file_tab(self):
-        self.file_frame = QWidget()
-        layout = QGridLayout(self.file_frame)
-        layout.setContentsMargins(10, 10, 10, 10)  # Tight margins for each row
-
-        # Title
-        title = QLabel("Select FIT File:")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
-        layout.addWidget(title, 0, 0, 1, 7, alignment=Qt.AlignCenter)
-
-        # Browse button and file label (row 1)
-        browse_btn = QPushButton("Browse FIT File")
-        browse_btn.clicked.connect(self._browse_fit_file)
-        layout.addWidget(browse_btn, 1, 2)
-
-        self.file_label = QLabel("No file selected")
-        self.file_label.setStyleSheet("color: #555;")
-        layout.addWidget(self.file_label, 1, 4)
-
-        # API call options during file load
-        self.load_weather_api_checkbox = QCheckBox("Call Weather API on file load")
-        self.load_weather_api_checkbox.setChecked(True)
-        layout.addWidget(self.load_weather_api_checkbox, 2, 2, 1, 2)
-
-        # Elevation API calls during file load (multiple can be enabled)
-        self.load_open_elevation_checkbox = QCheckBox("Call Open-Elevation API on file load")
-        self.load_open_elevation_checkbox.setChecked(True)
-        layout.addWidget(self.load_open_elevation_checkbox, 2, 4)
-
-        self.load_open_meteo_checkbox = QCheckBox("Call Open-Meteo Elevation API on file load")
-        self.load_open_meteo_checkbox.setChecked(False)
-        layout.addWidget(self.load_open_meteo_checkbox, 2, 5, 1, 2)
-
-        # File status (row 3) - expandable
-        self.file_status = QTextEdit()
-        self.file_status.setReadOnly(True)
-        layout.addWidget(self.file_status, 3, 0, 1, 7)  # Span both columns
-
-        # About button in corner (row 0, column 6)
-        about_btn = QPushButton("?")
-        about_btn.setFixedSize(25, 25)  # Small square button
-        about_btn.setToolTip("About this program")
-        about_btn.clicked.connect(self._show_about_dialog)
-        layout.addWidget(about_btn, 0, 6, alignment=Qt.AlignTop | Qt.AlignRight)
-
-        # Set row stretch so file_status can expand if window is resized
-        layout.setRowStretch(3, 1)  # Give extra vertical space to file_status row
-
-        # Optional: make columns expand properly
-        layout.setColumnStretch(0, 2)
-        layout.setColumnStretch(1, 1)
-        layout.setColumnStretch(2, 1)
-        layout.setColumnStretch(3, 1)
-        layout.setColumnStretch(4, 1)
-        layout.setColumnStretch(5, 1)
-        layout.setColumnStretch(6, 2)
-
-        self.tabs.addTab(self.file_frame, "File Selection")
-
-    def _setup_parameters_tab(self):
-        self.parameters_frame = QWidget()
-        layout = QVBoxLayout(self.parameters_frame)
-
-        # Title
-        title = QLabel("Analysis Parameters:")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
-        layout.addWidget(title, alignment=Qt.AlignCenter)
-
-        # Button layout
-        button_layout = QHBoxLayout()
-        run_btn = QPushButton("Run Analysis")
-        run_btn.clicked.connect(self._run_analysis)
-        button_layout.addStretch()
-        button_layout.addWidget(run_btn)
-        button_layout.addStretch()
-        layout.addLayout(button_layout)
-
-        # Scroll Area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(4)
-        scroll_layout.setContentsMargins(16, 8, 16, 8)
-
-        # (min, max, step, decimals, suffix) per numeric parameter.
-        param_meta = {
-            'rider_mass':              (40.0, 120.0, 0.5, 1, " kg"),
-            'bike_mass':               (4.0, 20.0, 0.1, 1, " kg"),
-            'rolling_resistance':      (0.001, 0.020, 0.0005, 4, ""),
-            'drivetrain_loss':         (0.0, 10.0, 0.1, 1, " %"),
-            'min_segment_length':      (10, 1000, 10, 0, " m"),
-            'min_duration':            (5, 120, 5, 0, " s"),
-            'min_speed':               (0.0, 20.0, 0.1, 1, " m/s"),
-            'max_speed':               (5.0, 30.0, 0.1, 1, " m/s"),
-            'max_slope_variation':     (0.0, 30.0, 0.5, 1, " \u00b0"),
-            'speed_steady_threshold':  (0.0, 2.0, 0.05, 2, " m/s"),
-            'power_steady_threshold':  (0.0, 500.0, 10.0, 0, " W"),
-            'slope_steady_threshold':  (0.0, 20.0, 0.5, 1, " \u00b0"),
-            'cda_keep_percent':        (10.0, 100.0, 5.0, 0, " %"),
-            'subsegment_min_duration_s': (1.0, 30.0, 1.0, 0, " s"),
-            'subsegment_min_points':   (3, 50, 1, 0, ""),
-            'wind_effect_factor':      (0.0, 1.0, 0.01, 2, ""),
-        }
-        param_groups = [
-            ("Rider & bike", ['rider_mass', 'bike_mass', 'rolling_resistance', 'drivetrain_loss']),
-            ("Segment detection", ['min_segment_length', 'min_duration', 'min_speed',
-                                    'max_speed', 'max_slope_variation']),
-            ("Steady-state thresholds", ['speed_steady_threshold', 'power_steady_threshold',
-                                          'slope_steady_threshold']),
-            ("CdA & sub-segments", ['cda_keep_percent', 'subsegment_min_duration_s',
-                                     'subsegment_min_points']),
-            ("Wind & weather", ['wind_effect_factor']),
-        ]
-
-        self.param_entries = {}
-        self.param_checkboxes = {}
-        # Parameters displayed as a percentage but stored as a fraction.
-        self._param_percent_keys = {'drivetrain_loss'}
-        # Advanced parameters hidden from the user page.
-        hidden_parameter_keys = {
-            'weather_sample_distance_m', 'elevation_source',
-            'wind_effect_factor',                  # controlled from the Results wind slider
-            'subsegment_min_duration_s', 'subsegment_min_points',  # advanced sub-segment
-            'slope_steady_threshold', 'max_slope_variation',       # slope parameters
-        }
-
-        for group_title, keys in param_groups:
-            rows = []
-            for key in keys:
-                if key not in self.parameters or key in hidden_parameter_keys:
-                    continue
-                value = self.parameters[key]
-                if isinstance(value, bool):
-                    continue
-                lo, hi, step, dec, suffix = param_meta[key]
-                disp = float(value) * 100.0 if key in self._param_percent_keys else float(value)
-                row = SliderRow(key.replace('_', ' ').title(), lo, hi,
-                                disp, step, decimals=dec, suffix=suffix,
-                                label_width=200)
-                self.param_entries[key] = row
-                rows.append(row)
-            if rows:
-                scroll_layout.addWidget(SectionHeader(group_title))
-                for row in rows:
-                    scroll_layout.addWidget(row)
-
-        # Boolean parameters (e.g. use_weather_api) as checkboxes.
-        bool_keys = [k for k, v in self.parameters.items()
-                     if isinstance(v, bool) and k not in hidden_parameter_keys]
-        if bool_keys:
-            scroll_layout.addWidget(SectionHeader("Toggles"))
-            for key in bool_keys:
-                row = QHBoxLayout()
-                row.setContentsMargins(0, 2, 0, 2)
-                label = QLabel(key.replace('_', ' ').title())
-                label.setFixedWidth(200)
-                checkbox = QCheckBox()
-                checkbox.setChecked(bool(self.parameters[key]))
-                self.param_checkboxes[key] = checkbox
-                row.addWidget(label)
-                row.addWidget(checkbox)
-                row.addStretch()
-                scroll_layout.addLayout(row)
-
-        # Analysis elevation source selector (used for CdA calculations)
-        scroll_layout.addWidget(SectionHeader("Elevation source (analysis)"))
-        elevation_row = QHBoxLayout()
-        elevation_row.setSpacing(10)
-        elevation_row.setContentsMargins(0, 2, 0, 2)
-
-        elevation_label = QLabel("Elevation Source:")
-        elevation_label.setFixedWidth(200)
-        elevation_row.addWidget(elevation_label)
-
-        self.analysis_elevation_source_group = QButtonGroup(self)
-
-        self.analysis_open_elevation_radio = QRadioButton("Open-Elevation")
-        self.analysis_open_meteo_radio = QRadioButton("Open-Meteo")
-        self.analysis_fit_radio = QRadioButton("FIT elevation")
-
-        self.analysis_elevation_source_group.addButton(self.analysis_open_elevation_radio, 0)
-        self.analysis_elevation_source_group.addButton(self.analysis_open_meteo_radio, 1)
-        self.analysis_elevation_source_group.addButton(self.analysis_fit_radio, 2)
-
-        selected_source = str(self.parameters.get('elevation_source', 'open_elevation'))
-        if selected_source == 'open_meteo':
-            self.analysis_open_meteo_radio.setChecked(True)
-        elif selected_source == 'fit_only':
-            self.analysis_fit_radio.setChecked(True)
-        else:
-            self.analysis_open_elevation_radio.setChecked(True)
-
-        elevation_row.addWidget(self.analysis_open_elevation_radio)
-        elevation_row.addWidget(self.analysis_open_meteo_radio)
-        elevation_row.addWidget(self.analysis_fit_radio)
-        elevation_row.addStretch()
-        scroll_layout.addLayout(elevation_row)
-
-        scroll_layout.addStretch()
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll)
-
-        self.tabs.addTab(self.parameters_frame, "Parameters")
-
-    def _setup_results_tab(self):
-        self.results_frame = QWidget()
-        layout = QVBoxLayout(self.results_frame)
-
-        # Title
-        title = QLabel("Analysis:")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
-        layout.addWidget(title, alignment=Qt.AlignCenter)
-
-        # Analysis status
-        analysis_layout = QVBoxLayout()
-        self.progress = CustomProgress()
-        self.progress.setRange(0, 100)  # Indeterminate
-        self.progress.setValue(0)   
-        self.progress.setAlignment(Qt.AlignCenter)  # center text in bar
-
-        #self.progress.setVisible(False)
-        self.analysis_status = QLabel("Ready to analyze")
-        analysis_layout.addWidget(self.progress)
-        analysis_layout.addWidget(self.analysis_status, alignment=Qt.AlignCenter)
-        layout.addLayout(analysis_layout)
-
-        # Wind effect factor slider (visible in all tabs)
-        wind_effect_layout = QHBoxLayout()
-        wind_effect_label = QLabel("Wind Effect Factor:")
-        wind_effect_label.setFont(QFont("Arial", 10, QFont.Bold))
-        wind_effect_layout.addWidget(wind_effect_label)
-        
-        self.wind_effect_slider = QSlider(Qt.Horizontal)
-        self.wind_effect_slider.setMinimum(0)
-        self.wind_effect_slider.setMaximum(100)
-        self.wind_effect_slider.setValue(int(self.analyzer.parameters['wind_effect_factor'] * 100))
-        self.wind_effect_slider.setTickPosition(QSlider.TicksBelow)
-        self.wind_effect_slider.setTickInterval(10)
-        self.wind_effect_slider.valueChanged.connect(self._on_wind_effect_slider_moved)
-        self.wind_effect_slider.sliderReleased.connect(self._on_wind_effect_changed)
-        wind_effect_layout.addWidget(self.wind_effect_slider)
-        
-        self.wind_effect_value_label = QLabel(f"{self.analyzer.parameters['wind_effect_factor']:.2f}")
-        self.wind_effect_value_label.setFont(QFont("Arial", 10))
-        self.wind_effect_value_label.setMinimumWidth(40)
-        wind_effect_layout.addWidget(self.wind_effect_value_label)
-        
-        layout.addLayout(wind_effect_layout)
-
-        # Results notebook (tabs)
-        self.results_notebook = QTabWidget()
-        layout.addWidget(self.results_notebook, 1)
-
-        # Summary tab
-        self.summary_frame = QWidget()
-        sum_layout = QVBoxLayout(self.summary_frame)
-        
-        self.summary_text = QTextEdit()
-        self.summary_text.setReadOnly(True)
-        self.summary_text.append("Run analysis to see results here")
-        sum_layout.addWidget(self.summary_text)
-        self.results_notebook.addTab(self.summary_frame, "Summary")
-
-        # Map tab — now with QWebEngineView
-        self.map_frame = QWidget()
-        map_layout = QVBoxLayout(self.map_frame)
-
-        self.map_webview = QWebEngineView()
-        self.map_webview.setMinimumHeight(400)
-        self.map_webview.settings().setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
-        map_layout.addWidget(self.map_webview)
-
-        self.map_refresh_btn = QPushButton("Generate / Refresh Map")
-        self.map_refresh_btn.clicked.connect(self._generate_map)
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()                 
-        btn_layout.addWidget(self.map_refresh_btn)
-        btn_layout.addStretch()                
-        map_layout.addLayout(btn_layout)
-
-        self.results_notebook.addTab(self.map_frame, "Map")
-
-        # Plot tab (unchanged)
-        self.plot_frame = QWidget()
-        plot_layout = QVBoxLayout(self.plot_frame)
-        self.plot_label = QLabel("Plots will be displayed here after analysis")
-        self.plot_label.setAlignment(Qt.AlignCenter)
-        plot_layout.addWidget(self.plot_label)
-        self.plot_button = QPushButton("Generate Plots")
-        self.plot_button.clicked.connect(self._generate_plots)
-        plot_layout.addWidget(self.plot_button)
-        self.results_notebook.addTab(self.plot_frame, "Plots")
-
-        # Keep for proper export in future
-        # # Bottom buttons
-        # btn_layout = QHBoxLayout()
-        # prev_btn = QPushButton("← Previous")
-        # prev_btn.clicked.connect(lambda: self.tabs.setCurrentWidget(self.parameters_frame))
-        # export_btn = QPushButton("Export Results")
-        # export_btn.clicked.connect(self._export_results)
-        # btn_layout.addWidget(prev_btn)
-        # btn_layout.addStretch()
-        # btn_layout.addWidget(export_btn)
-        # layout.addLayout(btn_layout)
-
-        self.tabs.addTab(self.results_frame, "Results & Analysis")
-
-    def _setup_simulation_tab(self):
-        """Setup weather simulation tab"""
-        self.simulation_frame = QWidget()
-        layout = QVBoxLayout(self.simulation_frame)
-
-        # Title
-        title = QLabel("Weather Simulation:")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
-        layout.addWidget(title, alignment=Qt.AlignCenter)
-
-        # Controls frame
-        controls_frame = QWidget()
-        controls_layout = QVBoxLayout(controls_frame)
-        
-        # Wind Speed slider
-        wind_speed_layout = QHBoxLayout()
-        wind_speed_label = QLabel("Wind Speed (m/s):")
-        wind_speed_label.setFont(QFont("Arial", 10, QFont.Bold))
-        wind_speed_label.setFixedWidth(150)
-        wind_speed_layout.addWidget(wind_speed_label)
-        
-        self.sim_wind_speed_slider = QSlider(Qt.Horizontal)
-        self.sim_wind_speed_slider.setMinimum(0)
-        self.sim_wind_speed_slider.setMaximum(200)  # 0-20 m/s
-        self.sim_wind_speed_slider.setValue(0)
-        self.sim_wind_speed_slider.setTickPosition(QSlider.TicksBelow)
-        self.sim_wind_speed_slider.setTickInterval(20)
-        self.sim_wind_speed_slider.valueChanged.connect(self._on_simulation_params_changed)
-        wind_speed_layout.addWidget(self.sim_wind_speed_slider)
-        
-        self.sim_wind_speed_value = QLabel("0.0")
-        self.sim_wind_speed_value.setFixedWidth(50)
-        wind_speed_layout.addWidget(self.sim_wind_speed_value)
-        
-        controls_layout.addLayout(wind_speed_layout)
-        
-        # Wind Angle slider
-        wind_angle_layout = QHBoxLayout()
-        wind_angle_label = QLabel("Wind Angle (°):")
-        wind_angle_label.setFont(QFont("Arial", 10, QFont.Bold))
-        wind_angle_label.setFixedWidth(150)
-        wind_angle_layout.addWidget(wind_angle_label)
-        
-        self.sim_wind_angle_slider = QSlider(Qt.Horizontal)
-        self.sim_wind_angle_slider.setMinimum(-180)
-        self.sim_wind_angle_slider.setMaximum(180)
-        self.sim_wind_angle_slider.setValue(0)
-        self.sim_wind_angle_slider.setTickPosition(QSlider.TicksBelow)
-        self.sim_wind_angle_slider.setTickInterval(45)
-        self.sim_wind_angle_slider.valueChanged.connect(self._on_simulation_params_changed)
-        wind_angle_layout.addWidget(self.sim_wind_angle_slider)
-        
-        self.sim_wind_angle_value = QLabel("0")
-        self.sim_wind_angle_value.setFixedWidth(50)
-        wind_angle_layout.addWidget(self.sim_wind_angle_value)
-        
-        controls_layout.addLayout(wind_angle_layout)
-        
-        # Wind Effect Factor slider
-        wind_factor_layout = QHBoxLayout()
-        wind_factor_label = QLabel("Wind Effect Factor:")
-        wind_factor_label.setFont(QFont("Arial", 10, QFont.Bold))
-        wind_factor_label.setFixedWidth(150)
-        wind_factor_layout.addWidget(wind_factor_label)
-        
-        self.sim_wind_factor_slider = QSlider(Qt.Horizontal)
-        self.sim_wind_factor_slider.setMinimum(0)
-        self.sim_wind_factor_slider.setMaximum(100)
-        self.sim_wind_factor_slider.setValue(int(self.analyzer.parameters['wind_effect_factor'] * 100))
-        self.sim_wind_factor_slider.setTickPosition(QSlider.TicksBelow)
-        self.sim_wind_factor_slider.setTickInterval(10)
-        self.sim_wind_factor_slider.valueChanged.connect(self._on_simulation_params_changed)
-        wind_factor_layout.addWidget(self.sim_wind_factor_slider)
-        
-        self.sim_wind_factor_value = QLabel(f"{self.analyzer.parameters['wind_effect_factor']:.2f}")
-        self.sim_wind_factor_value.setFixedWidth(50)
-        wind_factor_layout.addWidget(self.sim_wind_factor_value)
-        
-        controls_layout.addLayout(wind_factor_layout)
-
-        # Temperature (°C)
-        temp_layout = QHBoxLayout()
-        temp_label = QLabel("Temperature (°C):")
-        temp_label.setFont(QFont("Arial", 10, QFont.Bold))
-        temp_label.setFixedWidth(150)
-        temp_layout.addWidget(temp_label)
-
-        self.sim_temp_entry = QLineEdit("15.0")
-        self.sim_temp_entry.setFixedWidth(80)
-        temp_layout.addWidget(self.sim_temp_entry)
-        temp_layout.addStretch()
-        controls_layout.addLayout(temp_layout)
-
-        # Air Pressure (hPa)
-        press_layout = QHBoxLayout()
-        press_label = QLabel("Air Pressure (hPa):")
-        press_label.setFont(QFont("Arial", 10, QFont.Bold))
-        press_label.setFixedWidth(150)
-        press_layout.addWidget(press_label)
-
-        self.sim_pressure_entry = QLineEdit("1013.25")
-        self.sim_pressure_entry.setFixedWidth(80)
-        press_layout.addWidget(self.sim_pressure_entry)
-        press_layout.addStretch()
-        controls_layout.addLayout(press_layout)
-        
-        # Simulate button
-        simulate_btn = QPushButton("Run Simulation")
-        simulate_btn.clicked.connect(self._run_simulation)
-        controls_layout.addWidget(simulate_btn)
-        
-        layout.addWidget(controls_frame)
-        
-        # Results notebook (tabs)
-        self.simulation_notebook = QTabWidget()
-        layout.addWidget(self.simulation_notebook, 1)
-
-        # Summary tab
-        self.sim_summary_frame = QWidget()
-        sim_sum_layout = QVBoxLayout(self.sim_summary_frame)
-        self.sim_summary_text = QTextEdit()
-        self.sim_summary_text.setReadOnly(True)
-        self.sim_summary_text.append("Run simulation to see results here")
-        sim_sum_layout.addWidget(self.sim_summary_text)
-        self.simulation_notebook.addTab(self.sim_summary_frame, "Summary")
-
-        # Plots tab
-        self.sim_plot_frame = QWidget()
-        sim_plot_layout = QVBoxLayout(self.sim_plot_frame)
-        self.sim_plot_label = QLabel("Plots will be displayed here after simulation")
-        self.sim_plot_label.setAlignment(Qt.AlignCenter)
-        sim_plot_layout.addWidget(self.sim_plot_label)
-        self.simulation_notebook.addTab(self.sim_plot_frame, "Plots")
-
-        self.tabs.addTab(self.simulation_frame, "Weather Simulation")
 
     def _browse_fit_file(self):
         # Adjust to proper default path
@@ -1086,7 +989,6 @@ class GUIInterface(QMainWindow):
 
             self._enable_segment_parameters()
             self._cleanup_results(full_reset=True)
-            self.tabs.setCurrentWidget(self.parameters_frame)
             _mark_stage("ui:load_fit:done")
         except Exception as e:
             _mark_stage("ui:load_fit:exception")
@@ -1407,7 +1309,6 @@ class GUIInterface(QMainWindow):
         self.analyzer.preloaded_weather_samples = list(self.preloaded_weather_samples)
         self.analyzer.allow_runtime_weather_fetch = False
 
-        self.tabs.setCurrentWidget(self.results_frame)
         #self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # Indeterminate
         self.analysis_status.setText("Running analysis in background...")
@@ -1451,7 +1352,6 @@ class GUIInterface(QMainWindow):
                 _mark_stage("ui:on_analysis_complete:after_summary")
 
                 # Auto-generate visuals, but isolate failures so UI remains usable.
-                self.tabs.setCurrentWidget(self.results_frame)
                 self._auto_generate_visuals()
 
                 # Return to summary after auto-generation.
