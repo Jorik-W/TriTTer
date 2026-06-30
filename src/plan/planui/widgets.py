@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
-from ui.constants import ACCENT, CARD, TEXT, MUTED, ORANGE, GREEN, RED_COL
+from planui.constants import ACCENT, CARD, TEXT, MUTED, ORANGE, GREEN, RED_COL
 
 try:
     import pyqtgraph as pg

@@ -19,6 +19,7 @@ from PyQt5.QtGui import QFont
 from profiles import ProfileStore
 from profile_tab import ProfileTab
 from qt_gui import GUIInterface
+from plan_gui import PlanTab
 
 
 class TriTTerWindow(QMainWindow):
@@ -50,8 +51,9 @@ class TriTTerWindow(QMainWindow):
         self.analyze_gui = GUIInterface(app)
         self.tabs.addTab(self._build_analyze_page(), "Analyze")
 
-        # --- Plan tab (placeholder for next phase) ---
-        self.tabs.addTab(self._build_plan_placeholder(), "Plan")
+        # --- Plan tab (ported bike_estimator pacing window) ---
+        self.plan_gui = PlanTab()
+        self.tabs.addTab(self._build_plan_page(), "Plan")
 
         # Apply the initially selected rider to Analyze.
         self._apply_rider(self.store.get_selected())
@@ -84,22 +86,23 @@ class TriTTerWindow(QMainWindow):
         layout.addWidget(self.analyze_gui)
         return page
 
-    def _build_plan_placeholder(self):
+    def _build_plan_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        title = QLabel("Plan (Pacing)")
-        title.setFont(QFont("Arial", 14, QFont.Bold))
-        layout.addWidget(title, alignment=Qt.AlignCenter)
-        msg = QLabel(
-            "The Plan (pacing/time estimator) is being ported from bike_estimator "
-            "in the next phase.\n\nIt will use the selected rider's CdA, mass, Crr and "
-            "FTP from the Profile tab, share the unified weather/physics core, and add "
-            "an elevation graph + folium map plus FIT export / ADB push."
-        )
-        msg.setWordWrap(True)
-        msg.setAlignment(Qt.AlignCenter)
-        layout.addWidget(msg)
-        layout.addStretch()
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("Rider:"))
+        self.plan_combo = QComboBox()
+        self.plan_combo.addItems(self.store.names())
+        if self.store.selected:
+            self.plan_combo.setCurrentText(self.store.selected)
+        self.plan_combo.currentTextChanged.connect(self._on_plan_rider_selected)
+        bar.addWidget(self.plan_combo)
+        bar.addStretch()
+        layout.addLayout(bar)
+
+        layout.addWidget(self.plan_gui)
         return page
 
     # ---- rider sync ---------------------------------------------------
@@ -107,12 +110,17 @@ class TriTTerWindow(QMainWindow):
         if rider is None:
             return
         self.analyze_gui.apply_rider(rider)
+        try:
+            self.plan_gui.apply_rider(rider)
+        except Exception:
+            pass
 
     def _on_profile_rider_changed(self, rider):
         if self._syncing or rider is None:
             return
         self._syncing = True
         self.analyze_combo.setCurrentText(rider.name)
+        self.plan_combo.setCurrentText(rider.name)
         self._syncing = False
         self._apply_rider(rider)
 
@@ -123,6 +131,18 @@ class TriTTerWindow(QMainWindow):
         rider = self.store.select(name)
         self.profile_tab._refresh_combo()
         self.profile_tab._load_rider(rider)
+        self.plan_combo.setCurrentText(name)
+        self._syncing = False
+        self._apply_rider(rider)
+
+    def _on_plan_rider_selected(self, name):
+        if self._syncing or not name:
+            return
+        self._syncing = True
+        rider = self.store.select(name)
+        self.profile_tab._refresh_combo()
+        self.profile_tab._load_rider(rider)
+        self.analyze_combo.setCurrentText(name)
         self._syncing = False
         self._apply_rider(rider)
 

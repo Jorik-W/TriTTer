@@ -22,9 +22,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ui.constants import ACCENT, BG, GREEN, MUTED, ORANGE, RED_COL, SURFACE, TEXT, fmt_time
-from ui.widgets import MetricCard, SliderRow
-from weather import MODE_FORECAST, MODE_HISTORY
+from planui.constants import ACCENT, BG, GREEN, MUTED, ORANGE, RED_COL, SURFACE, TEXT, fmt_time
+from planui.widgets import MetricCard, SliderRow
+from weather_plan import MODE_FORECAST, MODE_HISTORY
 
 
 class CopyableTableWidget(QTableWidget):
