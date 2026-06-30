@@ -1212,14 +1212,10 @@ class BikeEstimator(QMainWindow):
             self.fit_data_ds.pop('rho', None)
             self.fit_data_ds.pop('wind', None)
 
-    def _load_fit(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open course file", "",
-            "Course files (*.fit *.FIT *.gpx *.GPX);;FIT files (*.fit *.FIT);;GPX files (*.gpx *.GPX)"
-        )
+    def _load_fit_external(self, path: str):
+        """Load a course file pushed from the Open File tab (bypasses the dialog)."""
         if not path:
             return
-
         self.fit_status.setText("Parsing course file\u2026")
         self.fit_status.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
         self.fit_btn.setEnabled(False)
@@ -1242,6 +1238,15 @@ class BikeEstimator(QMainWindow):
         thread.finished.connect(lambda rid=request_id: self._course_threads.pop(rid, None))
         self._course_threads[request_id] = (thread, worker)
         thread.start()
+
+    def _load_fit(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open course file", "",
+            "Course files (*.fit *.FIT *.gpx *.GPX);;FIT files (*.fit *.FIT);;GPX files (*.gpx *.GPX)"
+        )
+        if not path:
+            return
+        self._load_fit_external(path)
 
     def _on_course_loaded(self, request_id, path, data, adv_preview, classic_preview, plot_data):
         try:

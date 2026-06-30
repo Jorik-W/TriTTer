@@ -410,6 +410,20 @@ class GUIInterface(QMainWindow):
         self._setup_results_tab()
         self._setup_simulation_tab()
 
+    def load_file(self, path: str):
+        """Load a file into the Analyse pipeline (called from the Open File tab).
+
+        Sets ``self.fit_file_path`` and triggers the internal FIT load sequence,
+        exactly as if the user had browsed to the file inside the File tab.
+        """
+        if not path or not os.path.isfile(path):
+            return
+        self.fit_file_path = str(path)
+        from pathlib import Path as _Path
+        if hasattr(self, "file_label"):
+            self.file_label.setText(_Path(path).name)
+        self._load_fit_file()
+
     def apply_rider(self, rider):
         """Apply a selected rider profile's parameters to the Analyze form.
 
