@@ -419,7 +419,7 @@ class GUIInterface(QMainWindow):
 
         # Wind-effect SliderRow (not shown; _save_parameters reads/writes it)
         self.wind_effect_slider = SliderRow(
-            "Wind effect factor", 0.00, 1.00,
+            "Wind effect factor", 0.00, 1.50,
             self.analyzer.parameters.get('wind_effect_factor', 0.40),
             0.01, 2, "")
         self.wind_effect_slider.valueChanged.connect(self._on_wind_effect_slider_moved)
@@ -490,7 +490,7 @@ class GUIInterface(QMainWindow):
             'cda_keep_percent':        (10.0, 100.0, 5.0, 0, " %"),
             'subsegment_min_duration_s': (1.0, 30.0, 1.0, 0, " s"),
             'subsegment_min_points':   (3, 50, 1, 0, ""),
-            'wind_effect_factor':      (0.0, 1.0, 0.01, 2, ""),
+            'wind_effect_factor':      (0.0, 1.50, 0.01, 2, ""),
         }
 
         # Rider/bike sliders exist in param_entries for apply_rider but are not

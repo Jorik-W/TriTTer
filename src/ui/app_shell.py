@@ -110,6 +110,7 @@ class TriTTerWindow(QMainWindow):
         # --- Profile tab ---
         self.profile_tab = ProfileTab(self.store)
         self.profile_tab.riderChanged.connect(self._on_profile_rider_changed)
+        self.profile_tab.formDirty.connect(lambda: self._set_profile_dirty(True))
         self.tabs.addTab(self.profile_tab, "Profile")
 
         # --- Analyse tab ---
@@ -120,11 +121,19 @@ class TriTTerWindow(QMainWindow):
 
         # --- Plan tab ---
         self.plan_gui = PlanTab()
+        self.plan_gui.windEffectChanged.connect(self._on_plan_wef_changed)
         self._plan_page = self._build_plan_page()
         self.tabs.addTab(self._plan_page, "Plan")
 
         # Apply the initially selected rider.
         self._apply_rider(self.store.get_selected())
+
+        # Track tab switches for compute gating and profile dirty checks.
+        self._prev_tab_index = self.tabs.currentIndex()
+        self._plan_stale = False
+        self._analyse_stale = False
+        self._profile_dirty = False
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         self.raise_()
         self.activateWindow()
@@ -303,11 +312,16 @@ class TriTTerWindow(QMainWindow):
                 self.analyze_gui.apply_weather_from_tab(cfg)
             except Exception:
                 pass
+            if self.tabs.currentIndex() != self.tabs.indexOf(self._analyse_page):
+                self._analyse_stale = True
         if cfg.get("applies_plan", True):
+            plan_visible = (self.tabs.currentIndex() == self.tabs.indexOf(self._plan_page))
             try:
-                self.plan_gui.apply_weather_from_tab(cfg)
+                self.plan_gui.apply_weather_from_tab(cfg, recalc=plan_visible)
             except Exception:
                 pass
+            if not plan_visible:
+                self._plan_stale = True
 
     def _run_weather_fetch(self, distances, latitudes, longitudes, timestamps, start_time, mode):
         """Start a background multi-point weather fetch and wire result back to weather_tab."""
@@ -347,14 +361,42 @@ class TriTTerWindow(QMainWindow):
         except Exception:
             pass
 
+    def _on_plan_wef_changed(self, value: float):
+        """Plan WEF slider released — push to weather tab + analyse."""
+        try:
+            self.weather_tab.s_wef.set_value(value, silent=False)
+        except Exception:
+            pass
+
     def _apply_rider(self, rider):
         if rider is None:
             return
-        self.analyze_gui.apply_rider(rider)
-        try:
-            self.plan_gui.apply_rider(rider)
-        except Exception:
-            pass
+        analyse_idx = self.tabs.indexOf(self._analyse_page)
+        plan_idx = self.tabs.indexOf(self._plan_page)
+        current = self.tabs.currentIndex()
+
+        if current == analyse_idx:
+            self.analyze_gui.apply_rider(rider)
+        else:
+            self._analyse_stale = True
+            # Still push values silently so they're ready when tab is shown.
+            try:
+                self.analyze_gui.apply_rider(rider)
+            except Exception:
+                pass
+
+        if current == plan_idx:
+            try:
+                self.plan_gui.apply_rider(rider)
+            except Exception:
+                pass
+        else:
+            self._plan_stale = True
+            # Push values silently but skip recalculation.
+            try:
+                self.plan_gui._apply_rider_silent(rider)
+            except Exception:
+                pass
 
     def _on_manual_course_changed(self, dist_km, elev_m, climb_grad, desc_grad):
         try:
@@ -362,13 +404,23 @@ class TriTTerWindow(QMainWindow):
         except Exception:
             pass
 
+    def _refresh_rider_combos(self, selected: str | None = None):
+        """Rebuild analyse & plan combobox items from store."""
+        self._syncing = True
+        for combo in (self.analyze_combo, self.plan_combo):
+            combo.clear()
+            combo.addItems(self.store.names())
+            if selected:
+                combo.setCurrentText(selected)
+        self._syncing = False
+
     def _on_profile_rider_changed(self, rider):
         if self._syncing or rider is None:
             return
         self._syncing = True
-        self.analyze_combo.setCurrentText(rider.name)
-        self.plan_combo.setCurrentText(rider.name)
+        self._refresh_rider_combos(rider.name)
         self._syncing = False
+        self._set_profile_dirty(False)
         self._apply_rider(rider)
 
     def _on_analyze_rider_selected(self, name):
@@ -392,6 +444,77 @@ class TriTTerWindow(QMainWindow):
         self.analyze_combo.setCurrentText(name)
         self._syncing = False
         self._apply_rider(rider)
+
+    # ---- tab switch gating -------------------------------------------
+    def _on_tab_changed(self, index):
+        """Gate computation to visible tab; nuke results on Weather switch."""
+        prev = self._prev_tab_index
+        self._prev_tab_index = index
+
+        weather_idx = self.tabs.indexOf(self.weather_tab)
+        profile_idx = self.tabs.indexOf(self.profile_tab)
+        analyse_idx = self.tabs.indexOf(self._analyse_page)
+        plan_idx = self.tabs.indexOf(self._plan_page)
+
+        # Leaving Profile tab with unsaved changes → prompt.
+        if prev == profile_idx and self._profile_dirty:
+            reply = QMessageBox.question(
+                self, "Unsaved profile",
+                "You have unsaved profile changes.\n\nSave before switching?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if reply == QMessageBox.Cancel:
+                self.tabs.blockSignals(True)
+                self.tabs.setCurrentIndex(prev)
+                self.tabs.blockSignals(False)
+                self._prev_tab_index = prev
+                return
+            elif reply == QMessageBox.Save:
+                self.profile_tab._on_save()
+            else:
+                # Discard: reload stored rider into form.
+                rider = self.store.get_selected()
+                if rider:
+                    self.profile_tab._load_rider(rider)
+            self._set_profile_dirty(False)
+
+        # Switching TO Weather tab → mark Plan + Analyse as stale (nuke results).
+        if index == weather_idx:
+            self._plan_stale = True
+            self._analyse_stale = True
+            try:
+                self.plan_gui.advanced_results.show_no_file()
+                self.plan_gui._set_advanced_full_current(False)
+            except Exception:
+                pass
+            try:
+                self.analyze_gui._cleanup_results(full_reset=False)
+            except Exception:
+                pass
+
+        # Switching TO Plan → recalculate if stale.
+        elif index == plan_idx and self._plan_stale:
+            self._plan_stale = False
+            try:
+                self.plan_gui._recalculate()
+            except Exception:
+                pass
+
+        # Switching TO Analyse → recalculate if stale.
+        elif index == analyse_idx and self._analyse_stale:
+            self._analyse_stale = False
+            try:
+                self.analyze_gui._run_analysis()
+            except Exception:
+                pass
+
+    def _set_profile_dirty(self, dirty):
+        """Mark/unmark the Profile tab as having unsaved changes."""
+        self._profile_dirty = dirty
+        profile_idx = self.tabs.indexOf(self.profile_tab)
+        title = "Profile*" if dirty else "Profile"
+        self.tabs.setTabText(profile_idx, title)
 
     # ---- measured CdA handoff ----------------------------------------
     def _save_measured_cda(self):

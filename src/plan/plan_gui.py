@@ -29,6 +29,7 @@ from fit_export import write_power_course
 from weather_plan import (
     fetch_weather_samples,
     densities_from_samples,
+    headwinds_from_samples,
     seed_eta_seconds,
     MODE_FORECAST,
     MODE_HISTORY,
@@ -47,7 +48,7 @@ ADV_PREVIEW_SEGMENT_MAX_M = 100.0
 ADV_FULL_SEGMENT_MAX_M = 100.0
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-PC_DIR = os.path.join(os.path.abspath(__file__))
+PC_DIR = os.path.join(os.path.abspath(__file__), "..", "..")
 ANDROID_GPS_DIR = "/storage/emulated/0/tri-tter/"
 
 # When frozen (PyInstaller), bundled data lives under sys._MEIPASS.
@@ -335,6 +336,8 @@ class AdbSendWorker(QObject):
 
 
 class BikeEstimator(QMainWindow):
+    windEffectChanged = pyqtSignal(float)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TriTTer")
@@ -443,7 +446,7 @@ class BikeEstimator(QMainWindow):
         self._settings_widget.setWidgetResizable(True)
         self._settings_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._settings_widget.setVisible(False)
-        self._settings_widget.setMaximumHeight(140)
+        self._settings_widget.setMaximumHeight(170)
 
         settings_inner = QWidget()
         settings_layout = QVBoxLayout(settings_inner)
@@ -454,15 +457,18 @@ class BikeEstimator(QMainWindow):
 
         self.s_if   = SliderRow("Target IF",          0.0, 1.15, 0.70, 0.01, 2, "")
         self.s_vcap = SliderRow("Max descent speed",   30,   90,  75,   1,   0, " km/h")
+        self.s_wef  = SliderRow("Wind effect factor", 0.0, 1.50, 0.40, 0.01, 2, "")
         self.s_target_segs = SliderRow("Max power segments", 1, 50, 17, 1, 0, "")
         self.s_target_segs.setEnabled(False)  # enabled once a course is loaded
         self._target_segs_user_set = False
         self._target_segs_programmatic = False
-        for s in [self.s_if, self.s_vcap, self.s_target_segs]:
+        for s in [self.s_if, self.s_vcap, self.s_wef, self.s_target_segs]:
             settings_layout.addWidget(s)
             s.valueChanged.connect(self._on_slider_changed)
             s.interactionFinished.connect(self._on_slider_released)
         self.s_target_segs.valueChanged.connect(self._on_target_segs_changed)
+        self.s_wef.interactionFinished.connect(
+            lambda: self.windEffectChanged.emit(self.s_wef.value()))
 
         # ── Ghost sliders: course (set by Open File tab / file load) ─────
         self.s_dist  = SliderRow("Distance",          0,   350, 180, 0.5, 1, " km")
@@ -678,7 +684,44 @@ class BikeEstimator(QMainWindow):
                     slider.set_value(float(val), silent=True)
                 except (TypeError, ValueError):
                     pass
+        self._set_advanced_full_current(False)
         self._recalculate()
+
+    def _apply_rider_silent(self, rider):
+        """Push rider values into sliders without triggering recalculation."""
+        if rider is None:
+            return
+        ov = rider.to_plan_overrides()
+        mapping = {
+            's_cda': ov.get('cda'),
+            's_climb_cda': ov.get('climbing_cda'),
+            's_mass': ov.get('mass'),
+            's_crr': ov.get('crr'),
+            's_eff': (ov.get('eff') or 0.0) * 100.0,
+            's_ftp': ov.get('ftp'),
+        }
+        for attr, val in mapping.items():
+            slider = getattr(self, attr, None)
+            if slider is not None and val is not None:
+                try:
+                    slider.set_value(float(val), silent=True)
+                except (TypeError, ValueError):
+                    pass
+        adv_map = [
+            ('s_ftp',        ov.get('ftp')),
+            ('s_max_power',  ov.get('max_power')),
+            ('s_reserve',    ov.get('reserve_kj')),
+            ('s_min_reserve', ov.get('min_reserve_kj')),
+            ('s_decay',      ov.get('reserve_decay')),
+        ]
+        for attr, val in adv_map:
+            slider = getattr(self.advanced_input, attr, None)
+            if slider is not None and val is not None:
+                try:
+                    slider.set_value(float(val), silent=True)
+                except (TypeError, ValueError):
+                    pass
+        self._set_advanced_full_current(False)
 
     def set_manual_course(self, dist_km: float, elev_m: float, climb_grad: float, desc_grad: float):
         """Called by shell when Open File tab manual course values change (no file loaded)."""
@@ -687,13 +730,6 @@ class BikeEstimator(QMainWindow):
             self.s_elev.set_value(elev_m, silent=True)
             self.s_grad.set_value(climb_grad, silent=True)
             self.s_dgrad.set_value(desc_grad, silent=True)
-            self._recalculate()
-            slider = getattr(self, attr, None)
-            if slider is not None and val is not None:
-                try:
-                    slider.set_value(float(val), silent=True)
-                except (TypeError, ValueError):
-                    pass
         self._recalculate()
 
     def _recalculate(self, *_args):
@@ -830,6 +866,10 @@ class BikeEstimator(QMainWindow):
         )
 
     def _start_advanced_worker(self, grades, distances, adv_params, params, downsampled, calc_segment_max_m, rho=None, wind=None):
+        # Apply wind effect factor to scale the headwind array.
+        wef = self.s_wef.value()
+        if wind is not None:
+            wind = np.asarray(wind, dtype=float) * wef if np.ndim(wind) > 0 else float(wind) * wef
         self._set_results_enabled(False)
         self._adv_request_id += 1
         request_id = self._adv_request_id
@@ -866,12 +906,13 @@ class BikeEstimator(QMainWindow):
                     sim_result['distances_m'], inspect_sim,
                     sim_result.get('min_reserve_warn_j', 0.0)
                 )
-                # Update target-segments slider max from natural count.
-                natural = sim_result.get('natural_section_count')
-                if natural and natural > 0:
-                    is_first = self._course_natural_count is None
-                    self._course_natural_count = natural
-                    self._update_target_segs_slider(natural, reset_default=is_first)
+                # Update target-segments slider max only from full analysis, not quick preview.
+                if not downsampled:
+                    natural = sim_result.get('natural_section_count')
+                    if natural and natural > 0:
+                        is_first = self._course_natural_count is None
+                        self._course_natural_count = natural
+                        self._update_target_segs_slider(natural, reset_default=is_first)
             self.advanced_results.update_results(sim_result, ftp, downsampled=downsampled)
             if not downsampled:
                 self._set_advanced_full_current(sim_result is not None)
@@ -1129,7 +1170,7 @@ class BikeEstimator(QMainWindow):
         # Only triggered by hidden AdvancedInputPanel; no-op now that
         # shared WeatherTab drives plan weather via apply_weather_from_tab().
 
-    def apply_weather_from_tab(self, cfg: dict):
+    def apply_weather_from_tab(self, cfg: dict, recalc=True):
         """Apply weather settings from the shared WeatherTab to plan calculations.
 
         Called by app_shell whenever WeatherTab emits weatherChanged.
@@ -1140,6 +1181,7 @@ class BikeEstimator(QMainWindow):
             return
 
         self._weather_wef = float(cfg.get('wind_effect_factor', 0.40))
+        self.s_wef.set_value(self._weather_wef, silent=True)
         source = cfg.get('source', 'manual')
 
         if source == 'manual':
@@ -1156,7 +1198,8 @@ class BikeEstimator(QMainWindow):
                     'wind_speed_ms': wind_ms,
                     'use_api': False,
                 })
-            self._recalculate()
+            if recalc:
+                self._recalculate()
 
         elif source == 'api':
             api_result = cfg.get('api_result')
@@ -1164,11 +1207,13 @@ class BikeEstimator(QMainWindow):
                 # Weather tab already fetched multi-point samples — use them directly.
                 if self.fit_data is not None and self.fit_data.get('valid'):
                     self._apply_weather_samples(api_result['weather_samples'])
-                self._recalculate()
+                if recalc:
+                    self._recalculate()
             elif self.fit_data is not None and self.fit_data.get('valid'):
                 self._trigger_weather_fetch_tab(cfg)
             else:
-                self._recalculate()
+                if recalc:
+                    self._recalculate()
 
     def _trigger_weather_fetch_tab(self, tab_cfg: dict):
         """Start an API weather fetch driven by the shared WeatherTab config."""
@@ -1191,7 +1236,9 @@ class BikeEstimator(QMainWindow):
                     qdt.date().year(), qdt.date().month(), qdt.date().day(),
                     qdt.time().hour(), qdt.time().minute(),
                 )
-        # 'file' mode: WeatherFetchWorker uses timestamps array (or ETA from now)
+        # 'file' mode fallback: forecast requires a start_time; use now.
+        if start_time is None:
+            start_time = _dt.datetime.now()
 
         config = {
             'mode': MODE_FORECAST,
@@ -1317,17 +1364,24 @@ class BikeEstimator(QMainWindow):
         self._recalculate_advanced(self._get_params())
 
     def _apply_weather_samples(self, samples):
+        lats = self.fit_data.get('latitudes') if self.fit_data else None
+        lons = self.fit_data.get('longitudes') if self.fit_data else None
+        route_d = self.fit_data.get('distances') if self.fit_data else None
         if self.fit_data is not None:
             self.fit_data['weather_samples'] = samples
             self.fit_data['rho'] = densities_from_samples(
                 self.fit_data['distances'], samples
             )
-            self.fit_data.pop('wind', None)
+            self.fit_data['wind'] = headwinds_from_samples(
+                self.fit_data['distances'], samples, lats, lons, route_d
+            )
         if self.fit_data_ds is not None:
             self.fit_data_ds['rho'] = densities_from_samples(
                 self.fit_data_ds['distances'], samples
             )
-            self.fit_data_ds.pop('wind', None)
+            self.fit_data_ds['wind'] = headwinds_from_samples(
+                self.fit_data_ds['distances'], samples, lats, lons, route_d
+            )
 
     def _apply_manual_conditions(self, config):
         """Apply manual air density + wind (API toggle off) to course caches."""

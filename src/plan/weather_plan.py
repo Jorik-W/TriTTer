@@ -20,6 +20,7 @@ Design notes:
 """
 
 import logging
+import math
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -442,6 +443,52 @@ def densities_from_samples(distances, samples, altitudes=None):
             altitude_m=seg_alt,
         )
     return rho
+
+
+def headwinds_from_samples(distances, samples, latitudes, longitudes, route_distances):
+    """Per-segment headwind (m/s) from pre-fetched weather samples.
+
+    Each segment is matched to its nearest sample by distance.  The sample's
+    wind speed and direction are projected onto the route bearing at that point.
+    Returns a numpy array of length ``len(distances) - 1``, or ``0.0`` (scalar)
+    when geometry is unavailable.
+    """
+    from course import segment_bearings
+
+    distances = np.asarray(distances, dtype=float)
+    n_seg = len(distances) - 1
+    if n_seg < 1 or not samples:
+        return 0.0
+
+    if (latitudes is None or longitudes is None or route_distances is None
+            or len(latitudes) < 2):
+        return 0.0
+
+    bearings = segment_bearings(latitudes, longitudes)
+    if len(bearings) == 0:
+        return 0.0
+
+    rd = np.asarray(route_distances, dtype=float)
+    seg_mid_full = 0.5 * (rd[:-1] + rd[1:])
+
+    sample_dist = np.array([s["distance"] for s in samples], dtype=float)
+    sample_weather = [s.get("weather") or dict(_DEFAULTS) for s in samples]
+
+    tgt_mid = 0.5 * (distances[:-1] + distances[1:])
+    hw = np.zeros(n_seg, dtype=float)
+    for i in range(n_seg):
+        # Nearest sample
+        j = int(np.argmin(np.abs(sample_dist - tgt_mid[i])))
+        w = sample_weather[j]
+        ws = float(w.get("wind_speed", 0.0))
+        wd = float(w.get("wind_direction", 0.0))
+        if ws <= 1e-9:
+            continue
+        # Nearest bearing from full-res geometry
+        k = int(np.clip(np.searchsorted(seg_mid_full, tgt_mid[i]), 0, len(bearings) - 1))
+        rel = math.radians(float(bearings[k]) - wd)
+        hw[i] = ws * math.cos(rel)
+    return hw
 
 
 def seed_eta_seconds(distances, grades, *, power_w, cda, mass, crr, eff, rho=None):

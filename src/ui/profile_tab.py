@@ -18,6 +18,7 @@ class ProfileTab(QWidget):
     rider's data changes so the Analyze/Plan tabs can refresh."""
 
     riderChanged = pyqtSignal(object)  # emits the active Rider
+    formDirty = pyqtSignal()  # emits when any field is modified without saving
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -80,6 +81,7 @@ class ProfileTab(QWidget):
         name_lbl.setFixedWidth(LW)
         name_lbl.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
         self.f_name = QLineEdit()
+        self.f_name.textChanged.connect(self._mark_dirty)
         name_row.addWidget(name_lbl)
         name_row.addWidget(self.f_name)
         box_layout.addLayout(name_row)
@@ -100,6 +102,7 @@ class ProfileTab(QWidget):
                   self.f_cda, self.f_climb_cda, self.f_ftp, self.f_max_power,
                   self.f_reserve, self.f_min_reserve, self.f_decay]:
             box_layout.addWidget(w)
+            w.interactionFinished.connect(self._mark_dirty)
 
         # Notes (no slider — free text)
         notes_row = QHBoxLayout()
@@ -109,6 +112,7 @@ class ProfileTab(QWidget):
         notes_lbl.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
         self.f_notes = QPlainTextEdit()
         self.f_notes.setFixedHeight(60)
+        self.f_notes.textChanged.connect(self._mark_dirty)
         notes_row.addWidget(notes_lbl)
         notes_row.addWidget(self.f_notes)
         box_layout.addLayout(notes_row)
@@ -151,6 +155,10 @@ class ProfileTab(QWidget):
         self.f_decay.set_value(getattr(rider, 'reserve_decay', 0.20))
         self.f_notes.setPlainText(rider.notes)
         self._loading = False
+
+    def _mark_dirty(self, *_args):
+        if not self._loading:
+            self.formDirty.emit()
 
     def _form_to_rider(self):
         return Rider(
