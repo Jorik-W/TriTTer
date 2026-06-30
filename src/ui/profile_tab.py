@@ -1,14 +1,16 @@
 """Profile tab: edit and manage rider profiles (single source of truth)."""
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
-    QDoubleSpinBox, QPushButton, QComboBox, QGroupBox, QPlainTextEdit,
-    QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QComboBox, QGroupBox, QPlainTextEdit,
+    QMessageBox, QScrollArea,
 )
 from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtGui import QFont
 
 from profiles import Rider
+from widgets import SliderRow
+from theme import MUTED
 
 
 class ProfileTab(QWidget):
@@ -27,7 +29,20 @@ class ProfileTab(QWidget):
 
     # ---- UI -----------------------------------------------------------
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        root.addWidget(scroll)
+
+        inner = QWidget()
+        inner.setMaximumWidth(780)
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+        scroll.setWidget(inner)
 
         title = QLabel("Rider Profiles")
         title.setFont(QFont("Arial", 14, QFont.Bold))
@@ -55,31 +70,45 @@ class ProfileTab(QWidget):
 
         # Editor
         box = QGroupBox("Rider parameters")
-        form = QFormLayout(box)
+        box_layout = QVBoxLayout(box)
+        box_layout.setSpacing(4)
 
+        LW = 220   # label column width shared with SliderRow
+
+        # Name (no slider — free text)
+        name_row = QHBoxLayout()
+        name_lbl = QLabel("Name")
+        name_lbl.setFixedWidth(LW)
+        name_lbl.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
         self.f_name = QLineEdit()
-        form.addRow("Name", self.f_name)
+        name_row.addWidget(name_lbl)
+        name_row.addWidget(self.f_name)
+        box_layout.addLayout(name_row)
 
-        self.f_rider_mass = self._spin(30, 150, 0.1, " kg")
-        form.addRow("Rider mass", self.f_rider_mass)
-        self.f_bike_mass = self._spin(3, 30, 0.1, " kg")
-        form.addRow("Bike mass", self.f_bike_mass)
-        self.f_crr = self._spin(0.0, 0.02, 0.0001, "", 4)
-        form.addRow("Rolling resistance (Crr)", self.f_crr)
-        self.f_dtloss = self._spin(0.0, 10.0, 0.1, " %", 1)
-        form.addRow("Drivetrain loss", self.f_dtloss)
-        self.f_cda = self._spin(0.10, 0.60, 0.001, "", 3)
-        form.addRow("CdA (measured / manual)", self.f_cda)
-        self.f_climb_cda = self._spin(0.10, 0.70, 0.001, "", 3)
-        form.addRow("Climbing CdA", self.f_climb_cda)
-        self.f_ftp = self._spin(80, 600, 1, " W", 0)
-        form.addRow("FTP", self.f_ftp)
-        self.f_max_power = self._spin(100, 2000, 1, " W", 0)
-        form.addRow("Max power", self.f_max_power)
+        # Numeric fields as SliderRow
+        self.f_rider_mass = SliderRow("Rider mass",              30,   150,  75.0,  0.1,    1, " kg", label_width=LW)
+        self.f_bike_mass  = SliderRow("Bike mass",                3,    30,  10.0,  0.1,    1, " kg", label_width=LW)
+        self.f_crr        = SliderRow("Rolling resistance (Crr)", 0.0,  0.02, 0.005, 0.0001, 4, "",   label_width=LW)
+        self.f_dtloss     = SliderRow("Drivetrain loss",          0.0,  10.0, 2.5,   0.1,    1, " %", label_width=LW)
+        self.f_cda        = SliderRow("CdA (measured / manual)",  0.10, 0.60, 0.290, 0.001,  3, "",   label_width=LW)
+        self.f_climb_cda  = SliderRow("Climbing CdA",             0.10, 0.70, 0.310, 0.001,  3, "",   label_width=LW)
+        self.f_ftp        = SliderRow("FTP",                      80,   600,  309,   1,      0, " W", label_width=LW)
+        self.f_max_power  = SliderRow("Max power",               100,  2000,  400,   1,      0, " W", label_width=LW)
+        for w in [self.f_rider_mass, self.f_bike_mass, self.f_crr, self.f_dtloss,
+                  self.f_cda, self.f_climb_cda, self.f_ftp, self.f_max_power]:
+            box_layout.addWidget(w)
 
+        # Notes (no slider — free text)
+        notes_row = QHBoxLayout()
+        notes_lbl = QLabel("Notes")
+        notes_lbl.setFixedWidth(LW)
+        notes_lbl.setAlignment(Qt.AlignTop)
+        notes_lbl.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
         self.f_notes = QPlainTextEdit()
         self.f_notes.setFixedHeight(60)
-        form.addRow("Notes", self.f_notes)
+        notes_row.addWidget(notes_lbl)
+        notes_row.addWidget(self.f_notes)
+        box_layout.addLayout(notes_row)
 
         layout.addWidget(box)
 
@@ -91,15 +120,6 @@ class ProfileTab(QWidget):
         btn_row.addWidget(save_btn)
         layout.addLayout(btn_row)
         layout.addStretch()
-
-    def _spin(self, lo, hi, step, suffix="", decimals=2):
-        sp = QDoubleSpinBox()
-        sp.setRange(lo, hi)
-        sp.setSingleStep(step)
-        sp.setDecimals(decimals)
-        if suffix:
-            sp.setSuffix(suffix)
-        return sp
 
     # ---- data binding -------------------------------------------------
     def _refresh_combo(self):
@@ -115,14 +135,14 @@ class ProfileTab(QWidget):
             return
         self._loading = True
         self.f_name.setText(rider.name)
-        self.f_rider_mass.setValue(rider.rider_mass)
-        self.f_bike_mass.setValue(rider.bike_mass)
-        self.f_crr.setValue(rider.rolling_resistance)
-        self.f_dtloss.setValue(rider.drivetrain_loss * 100.0)
-        self.f_cda.setValue(rider.cda)
-        self.f_climb_cda.setValue(rider.climbing_cda)
-        self.f_ftp.setValue(rider.ftp)
-        self.f_max_power.setValue(getattr(rider, 'max_power', 400.0))
+        self.f_rider_mass.set_value(rider.rider_mass)
+        self.f_bike_mass.set_value(rider.bike_mass)
+        self.f_crr.set_value(rider.rolling_resistance)
+        self.f_dtloss.set_value(rider.drivetrain_loss * 100.0)
+        self.f_cda.set_value(rider.cda)
+        self.f_climb_cda.set_value(rider.climbing_cda)
+        self.f_ftp.set_value(rider.ftp)
+        self.f_max_power.set_value(getattr(rider, 'max_power', 400.0))
         self.f_notes.setPlainText(rider.notes)
         self._loading = False
 
@@ -190,5 +210,5 @@ class ProfileTab(QWidget):
             return
         rider.cda = round(float(cda_value), 4)
         self.store.update(rider)
-        self._load_rider(rider)
+        self.f_cda.set_value(rider.cda)
         self.riderChanged.emit(rider)
