@@ -182,18 +182,18 @@ class CDAAnalyzer:
     def _aggregate_subsegment_results(self, segment_df, sub_results, env_conditions):
         """Aggregate per-sub-segment results into a single segment result dict.
 
-        All scalar fields are computed as duration-weighted averages.
+        All scalar fields are computed as distance-weighted averages.
         Wind angle uses a circular weighted mean so that cross-winds near
         ±180° are handled correctly.
         """
-        durations   = [r['duration'] for r in sub_results]
-        total_dur   = sum(durations)
-        weights     = [d / total_dur for d in durations]
+        raw_weights = [r['air_speed']**2 * r['distance'] for r in sub_results]
+        total_w     = sum(raw_weights)
+        weights     = [w / total_w for w in raw_weights] if total_w > 0 else [1.0 / len(sub_results)] * len(sub_results)
 
         def wavg(key):
             return float(sum(r[key] * w for r, w in zip(sub_results, weights)))
 
-        # Duration-weighted CdA
+        # Distance-weighted CdA
         cda_values  = np.array([r['cda'] for r in sub_results])
         final_cda   = float(np.average(cda_values, weights=weights))
         # Weighted population std-dev across sub-segment means
@@ -1300,7 +1300,7 @@ class CDAAnalyzer:
         """Return weighted CdA metrics for all segments and kept subset.
 
         The kept subset is created by repeatedly removing the segment with the
-        largest absolute deviation from the current duration-weighted mean CdA,
+        largest absolute deviation from the current distance-weighted mean CdA,
         until only ``cda_keep_percent`` of segments remain.
         """
         keep_percent = self.parameters.get('cda_keep_percent')
@@ -1323,23 +1323,29 @@ class CDAAnalyzer:
                 'kept_segments_used': 0,
             }
 
-        # Weighted CdA across all segments (duration-weighted)
+        # Weighted CdA across all segments (energy-weighted: v_air² × distance)
         all_cda = [s['cda'] for s in valid_segments]
-        all_weights = [max(float(s.get('duration', 0.0)), 0.0) for s in valid_segments]
+        all_weights = [
+            s.get('v_air', s.get('air_speed', 0.0))**2 * max(float(s.get('distance', 0.0)), 0.0)
+            for s in valid_segments
+        ]
         if sum(all_weights) > 0:
             weighted_all = float(np.average(all_cda, weights=all_weights))
         else:
             weighted_all = float(np.mean(all_cda))
 
         # Iteratively remove the largest absolute outlier from the current
-        # duration-weighted mean until the target keep size is reached.
+        # distance-weighted mean until the target keep size is reached.
         current_segments = list(valid_segments)
         n = len(current_segments)
         target_keep_count = max(1, int(np.ceil(n * keep_percent / 100.0)))
 
         while len(current_segments) > target_keep_count:
             current_cda = [s['cda'] for s in current_segments]
-            current_weights = [max(float(s.get('duration', 0.0)), 0.0) for s in current_segments]
+            current_weights = [
+                s.get('v_air', s.get('air_speed', 0.0))**2 * max(float(s.get('distance', 0.0)), 0.0)
+                for s in current_segments
+            ]
             if sum(current_weights) > 0:
                 center = float(np.average(current_cda, weights=current_weights))
             else:
@@ -1349,7 +1355,10 @@ class CDAAnalyzer:
             current_segments.pop(remove_idx)
 
         kept_cda = [s['cda'] for s in current_segments]
-        kept_weights = [max(float(s.get('duration', 0.0)), 0.0) for s in current_segments]
+        kept_weights = [
+            s.get('v_air', s.get('air_speed', 0.0))**2 * max(float(s.get('distance', 0.0)), 0.0)
+            for s in current_segments
+        ]
         if sum(kept_weights) > 0:
             weighted_kept = float(np.average(kept_cda, weights=kept_weights))
         else:
