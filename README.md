@@ -7,20 +7,10 @@ A unified cycling toolkit that merges two previously separate tools:
   matplotlib plots and a folium map.
 - **Plan (Pacing)** — from `bike_estimator`: load a *course* (FIT/GPX) and estimate
   time/power with a fatigue-aware durability model, then export a power-course FIT
-  and optionally push it to a Garmin/Android device via ADB.
+  and optionally push it to a Hammerhead bike computer (Android device) via ADB.
 
 Both modes share one core (weather, air density, FIT parsing, physics) and a single
 **Profile** that owns rider parameters.
-
-## Status
-
-Phased build:
-
-- **Phase 1 (done):** project scaffold + git, unified shared core (humidity-corrected
-  air density), **Analyze** fully working, **Profile** tab with multiple riders and
-  JSON persistence, 3-tab GUI shell, CLI for Analyze.
-- **Phase 2 (next):** port the **Plan** mode (pacing, durability model, FIT export,
-  ADB push), add an elevation graph + folium map to Plan, and a Plan CLI.
 
 ## Architecture
 

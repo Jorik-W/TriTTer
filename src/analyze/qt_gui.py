@@ -28,9 +28,10 @@ from PyQt5.QtWidgets import (
     QTabWidget, QLabel, QPushButton, QTextEdit, QLineEdit,
     QFileDialog, QMessageBox, QProgressBar, QScrollArea,
     QSplashScreen, QGridLayout, QFrame, QDialog, QSlider, QSpinBox, QCheckBox,
-    QRadioButton, QButtonGroup
+    QRadioButton, QButtonGroup, QGroupBox, QAbstractItemView, QHeaderView,
+    QTableWidgetItem, QSizePolicy,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QRect, QByteArray
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QRect
 from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter, QBrush, QLinearGradient, QColor
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
 
@@ -41,8 +42,8 @@ from analyzer import CDAAnalyzer
 from weather import WeatherService
 from elevation import ElevationService, OpenMeteoElevationService
 from config import DEFAULT_PARAMETERS
-from widgets import SliderRow, SectionHeader
-from theme import MUTED, TEXT, ACCENT, GREEN, ORANGE, RED_COL, BORDER, SURFACE, CARD
+from widgets import SliderRow, SectionHeader, MetricCard, CopyableTableWidget
+from theme import MUTED, TEXT, ACCENT, GREEN, ORANGE, RED_COL, BORDER, SURFACE, CARD, apply_dwm_dark_titlebar
 
 _CRASH_APP = None
 _CRASH_LOG_PATH = Path.cwd() / "cda_analyzer_crash.log"
@@ -190,7 +191,7 @@ class WorkerThread(QThread):
         _logger.info(message)
 
     def _prepare_elevation_for_analysis(self):
-        elevation_source = self.analyzer.parameters.get('elevation_source', 'open_elevation')
+        elevation_source = self.analyzer.parameters.get('elevation_source', 'fit_only')
         
         has_fit_altitude = (
             'altitude_fit' in self.ride_data.columns and
@@ -298,7 +299,7 @@ class CustomProgress(QProgressBar):
         rect = self.rect()
 
         # Background
-        painter.setBrush(QColor("#e0e0e0"))
+        painter.setBrush(QColor("#5a5a72"))
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(rect, 5, 5)
 
@@ -352,10 +353,12 @@ def resource_path(relative_path):
     return path
 
 class GUIInterface(QMainWindow):
+    windEffectChanged = pyqtSignal(float)   # emitted when user changes WEF slider
+
     def __init__(self, app):
         super().__init__()
         self.app = app  # Store reference
-        self.setWindowTitle("CdA Analyzer")
+        self.setWindowTitle("TriTTer")
         self.resize(1200, 1000)
         self._set_window_icon()
 
@@ -365,12 +368,9 @@ class GUIInterface(QMainWindow):
         self.ride_data = None
         self.analysis_results = None
         self.preprocessed_segments = None
-        self.simulation_results = None
         self.segment_data_map = {}
         self.current_figure = None
         self.current_canvas = None
-        self.sim_figure = None
-        self.sim_canvas = None
         self.worker = None
         self._map_html_path = None
         self.load_weather_api_on_file_load = True
@@ -408,7 +408,6 @@ class GUIInterface(QMainWindow):
         self.file_label  = QLabel()
         self.parameters_frame = QWidget()
         self.results_frame    = QWidget()
-        self.simulation_frame = QWidget()
 
         # File-load API checkboxes (not shown; defaults read in _load_fit_file)
         self.load_weather_api_checkbox = QCheckBox()
@@ -445,12 +444,6 @@ class GUIInterface(QMainWindow):
         self.analysis_status = QLabel("Ready to analyse")
         self.analysis_status.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
         top_bar.addWidget(self.analysis_status)
-
-        about_btn = QPushButton("?")
-        about_btn.setFixedSize(25, 25)
-        about_btn.setToolTip("About this program")
-        about_btn.clicked.connect(self._show_about_dialog)
-        top_bar.addWidget(about_btn)
         layout.addLayout(top_bar)
 
         # ── Collapsible Advanced settings strip ───────────────────────────
@@ -476,7 +469,6 @@ class GUIInterface(QMainWindow):
         self._build_summary_tab()
         self._build_map_tab()
         self._build_plots_tab()
-        self._build_simulation_tab()
 
     # ---- Advanced params ------------------------------------------------
     def _build_advanced_params(self, adv_layout):
@@ -554,7 +546,7 @@ class GUIInterface(QMainWindow):
         bool_keys = [k for k, v in self.parameters.items()
                      if isinstance(v, bool) and k not in hidden_always]
         if bool_keys:
-            adv_layout.addWidget(SectionHeader("Toggles"))
+            adv_layout.addWidget(SectionHeader("Weather settings"))
             for key in bool_keys:
                 row = QHBoxLayout()
                 row.setContentsMargins(0, 2, 0, 2)
@@ -567,6 +559,8 @@ class GUIInterface(QMainWindow):
                 row.addWidget(cb)
                 row.addStretch()
                 adv_layout.addLayout(row)
+
+        adv_layout.addWidget(self.wind_effect_slider)
 
         # Elevation source radio buttons
         adv_layout.addWidget(SectionHeader("Elevation source (analysis)"))
@@ -585,13 +579,13 @@ class GUIInterface(QMainWindow):
         self.analysis_elevation_source_group.addButton(self.analysis_open_meteo_radio,      1)
         self.analysis_elevation_source_group.addButton(self.analysis_fit_radio,             2)
 
-        src = str(self.parameters.get('elevation_source', 'open_elevation'))
+        src = str(self.parameters.get('elevation_source', 'fit_only'))
         if src == 'open_meteo':
             self.analysis_open_meteo_radio.setChecked(True)
-        elif src == 'fit_only':
-            self.analysis_fit_radio.setChecked(True)
-        else:
+        elif src == 'open_elevation':
             self.analysis_open_elevation_radio.setChecked(True)
+        else:  # 'fit_only' (default)
+            self.analysis_fit_radio.setChecked(True)
 
         elev_row.addWidget(self.analysis_open_elevation_radio)
         elev_row.addWidget(self.analysis_open_meteo_radio)
@@ -607,11 +601,117 @@ class GUIInterface(QMainWindow):
     # ---- Result sub-tabs ------------------------------------------------
     def _build_summary_tab(self):
         self.summary_frame = QWidget()
-        layout = QVBoxLayout(self.summary_frame)
-        self.summary_text = QTextEdit()
-        self.summary_text.setReadOnly(True)
-        self.summary_text.append("Run analysis to see results here")
-        layout.addWidget(self.summary_text)
+        outer = QVBoxLayout(self.summary_frame)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(8)
+
+        # Status label shown while no results are available
+        self.summary_status_label = QLabel("Run analysis to see results here")
+        self.summary_status_label.setStyleSheet(
+            f"color: {MUTED}; font-size: 13px; font-style: italic; padding: 20px;"
+        )
+        self.summary_status_label.setAlignment(Qt.AlignCenter)
+        outer.addWidget(self.summary_status_label)
+
+        # ── Results panel (hidden until analysis completes) ───────────────
+        self._summary_results_widget = QWidget()
+        self._summary_results_widget.setVisible(False)
+        results_layout = QVBoxLayout(self._summary_results_widget)
+        results_layout.setContentsMargins(0, 0, 0, 0)
+        results_layout.setSpacing(8)
+
+        # Metric cards row
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(8)
+        self.card_cda           = MetricCard("Weighted CdA",      "\u2014", accent=True)
+        self.card_cda_std       = MetricCard("CdA std dev",       "\u2014")
+        self.card_dist_ridden   = MetricCard("Distance ridden",   "\u2014")
+        self.card_dist_analysed = MetricCard("Distance analysed", "\u2014")
+        self.card_vw            = MetricCard("Avg wind v\u1d64",  "\u2014")
+        self.card_wind_dir      = MetricCard("Wind dir",          "\u2014")
+        self.card_np            = MetricCard("NP",                "\u2014")
+        self.card_avg_pwr       = MetricCard("Avg power",         "\u2014")
+        for c in [
+            self.card_cda, self.card_cda_std,
+            self.card_dist_ridden, self.card_dist_analysed,
+            self.card_vw, self.card_wind_dir,
+            self.card_np, self.card_avg_pwr,
+        ]:
+            cards_row.addWidget(c)
+        results_layout.addLayout(cards_row)
+
+        # ── Collapsible details group box ─────────────────────────────────
+        self.details_box = QGroupBox("Details")
+        self.details_box.setCheckable(True)
+        self.details_box.setChecked(False)
+        self.details_box.setStyleSheet(
+            f"QGroupBox {{ color: {MUTED}; font-size: 11px; border: 1px solid {BORDER}; "
+            f"border-radius: 4px; margin-top: 6px; padding-top: 4px; }}"
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 8px; }}"
+        )
+        details_outer_layout = QVBoxLayout(self.details_box)
+        details_outer_layout.setContentsMargins(6, 4, 6, 4)
+        self.details_content = QWidget()
+        details_inner = QVBoxLayout(self.details_content)
+        details_inner.setContentsMargins(0, 0, 0, 0)
+        self.details_text = QTextEdit()
+        self.details_text.setReadOnly(True)
+        self.details_text.setMaximumHeight(220)
+        self.details_text.setStyleSheet(
+            f"QTextEdit {{ background: transparent; color: {MUTED}; "
+            f"font-size: 11px; border: none; font-family: monospace; }}"
+        )
+        details_inner.addWidget(self.details_text)
+        details_outer_layout.addWidget(self.details_content)
+        self.details_box.toggled.connect(self.details_content.setVisible)
+        self.details_content.setVisible(False)
+        results_layout.addWidget(self.details_box)
+
+        # ── Segment table ─────────────────────────────────────────────────
+        self.segment_box = QGroupBox("Segments")
+        self.segment_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        seg_layout = QVBoxLayout(self.segment_box)
+        seg_layout.setContentsMargins(8, 8, 8, 8)
+        seg_layout.setSpacing(2)
+        self.segment_table = CopyableTableWidget(0, 12)
+        self.segment_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.segment_table.setMinimumHeight(200)
+        self.segment_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.segment_table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.segment_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.segment_table.setAlternatingRowColors(True)
+        self.segment_table.setShowGrid(False)
+        self.segment_table.verticalHeader().setVisible(False)
+        self.segment_table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.segment_table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft)
+        self.segment_table.horizontalHeader().setHighlightSections(False)
+        self.segment_table.horizontalHeader().setMinimumHeight(22)
+        self.segment_table.horizontalHeader().setStyleSheet(
+            f"QHeaderView::section {{ background: transparent; color: {MUTED}; "
+            f"border: 0; padding: 2px 4px; font-size: 10px; }}"
+        )
+        self.segment_table.setStyleSheet(
+            f"""
+            QTableWidget {{
+                background: transparent;
+                color: {TEXT};
+                border: 0;
+                alternate-background-color: #20203a;
+                selection-background-color: #3b3b58;
+                selection-color: #f3f4ff;
+                gridline-color: transparent;
+                font-size: 11px;
+                font-family: monospace;
+            }}
+            QTableWidget::item {{
+                padding: 3px 6px;
+            }}
+            """
+        )
+        seg_layout.addWidget(self.segment_table)
+        results_layout.addWidget(self.segment_box, 1)
+
+        outer.addWidget(self._summary_results_widget, 1)
         self.results_notebook.addTab(self.summary_frame, "Summary")
 
     def _build_map_tab(self):
@@ -641,80 +741,6 @@ class GUIInterface(QMainWindow):
         self.plot_button.clicked.connect(self._generate_plots)
         plot_layout.addWidget(self.plot_button)
         self.results_notebook.addTab(self.plot_frame, "Plots")
-
-    def _build_simulation_tab(self):
-        """Build the Weather Simulation tab inside the results notebook."""
-        sim_outer = QWidget()
-        outer_layout = QVBoxLayout(sim_outer)
-        outer_layout.setContentsMargins(6, 6, 6, 6)
-        outer_layout.setSpacing(6)
-
-        # ── Controls ─────────────────────────────────────────────────────
-        controls_layout = QVBoxLayout()
-        controls_layout.setSpacing(4)
-
-        # Wind speed
-        self.sim_wind_speed_slider = SliderRow("Wind Speed", 0.0, 20.0, 0.0, 0.1, 1, " m/s")
-        self.sim_wind_speed_slider.valueChanged.connect(self._on_simulation_params_changed)
-        controls_layout.addWidget(self.sim_wind_speed_slider)
-
-        # Wind angle
-        self.sim_wind_angle_slider = SliderRow("Wind Angle", -180, 180, 0, 1, 0, "\u00b0")
-        self.sim_wind_angle_slider.valueChanged.connect(self._on_simulation_params_changed)
-        controls_layout.addWidget(self.sim_wind_angle_slider)
-
-        # Wind effect factor
-        self.sim_wind_factor_slider = SliderRow(
-            "Wind Effect Factor", 0.00, 1.00,
-            self.analyzer.parameters.get('wind_effect_factor', 0.40),
-            0.01, 2, "")
-        self.sim_wind_factor_slider.valueChanged.connect(self._on_simulation_params_changed)
-        controls_layout.addWidget(self.sim_wind_factor_slider)
-
-        # Temperature & pressure
-        cond_row = QHBoxLayout()
-        temp_lbl = QLabel("Temperature (°C):")
-        temp_lbl.setFixedWidth(150)
-        self.sim_temp_entry = QLineEdit("15.0")
-        self.sim_temp_entry.setFixedWidth(80)
-        press_lbl = QLabel("Air Pressure (hPa):")
-        press_lbl.setFixedWidth(150)
-        self.sim_pressure_entry = QLineEdit("1013.25")
-        self.sim_pressure_entry.setFixedWidth(80)
-        cond_row.addWidget(temp_lbl)
-        cond_row.addWidget(self.sim_temp_entry)
-        cond_row.addSpacing(16)
-        cond_row.addWidget(press_lbl)
-        cond_row.addWidget(self.sim_pressure_entry)
-        cond_row.addStretch()
-        controls_layout.addLayout(cond_row)
-
-        simulate_btn = QPushButton("Run Simulation")
-        simulate_btn.clicked.connect(self._run_simulation)
-        controls_layout.addWidget(simulate_btn)
-
-        outer_layout.addLayout(controls_layout)
-
-        # ── Simulation results sub-tabs ──────────────────────────────────
-        self.simulation_notebook = QTabWidget()
-        outer_layout.addWidget(self.simulation_notebook, 1)
-
-        self.sim_summary_frame = QWidget()
-        sim_sum_layout = QVBoxLayout(self.sim_summary_frame)
-        self.sim_summary_text = QTextEdit()
-        self.sim_summary_text.setReadOnly(True)
-        self.sim_summary_text.append("Run simulation to see results here")
-        sim_sum_layout.addWidget(self.sim_summary_text)
-        self.simulation_notebook.addTab(self.sim_summary_frame, "Summary")
-
-        self.sim_plot_frame = QWidget()
-        sim_plot_layout = QVBoxLayout(self.sim_plot_frame)
-        self.sim_plot_label = QLabel("Plots will be displayed here after simulation")
-        self.sim_plot_label.setAlignment(Qt.AlignCenter)
-        sim_plot_layout.addWidget(self.sim_plot_label)
-        self.simulation_notebook.addTab(self.sim_plot_frame, "Plots")
-
-        self.results_notebook.addTab(sim_outer, "Simulation")
 
     def load_file(self, path: str):
         """Load a file into the Analyse pipeline (called from the Open File tab).
@@ -761,72 +787,78 @@ class GUIInterface(QMainWindow):
         except Exception:
             _logger.exception("Failed to rebuild analyzer after rider change")
 
-    def _show_about_dialog(self):
-        dialog = QDialog(self, flags=Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
-        dialog.setWindowTitle("About CdA Analyzer")
-        dialog.setFixedWidth(400)  # Optional: fixed width
+    def update_parameters(self, params: dict):
+        """Update analyzer parameters and sync UI widgets.
 
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        # Logo
-        logo_data = QByteArray.fromBase64(LOGO_BASE64.encode('utf-8'))
-        pixmap = QPixmap()
-        pixmap.loadFromData(logo_data)
-        pixmap = pixmap.scaledToWidth(80, Qt.SmoothTransformation)  # Smaller logo
-        logo_label = QLabel()
-        logo_label.setPixmap(pixmap)
-        logo_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(logo_label)
-
-        # Text
-        about_text = """
-        <b>CdA Analyzer</b><br>
-        Version 1.0<br><br>
-        <b>Author:</b> Jorik Wittevrongel<br>
-        <b>GitHub:</b> <a href='https://github.com/JorikWit/CdA-Analyser'>https://github.com/JorikWit/CdA-Analyser</a><br><br>
-
-        This program is licensed under the
-        MIT License.<br>
-        See the LICENSE file for details.<br><br>
-
-        <b>Icon credit:</b><br>
-        Time Trial Bike icon by
-        <a href='https://www.flaticon.com/authors/izwar-muis'>Izwar Muis</a>
-        from
-        <a href='https://www.flaticon.com/free-icon/time-trial-bike_17736701'>Flaticon</a>
-        (used with attribution).<br><br>
-
-        <b>Third-party libraries:</b><br>
-        - fitparse (BSD License)<br>
-        - folium (MIT License)<br>
-        - geopy (MIT License)<br>
-        - matplotlib (Matplotlib License, BSD-compatible)<br>
-        - numpy (BSD-3-Clause)<br>
-        - pandas (BSD-3-Clause)<br>
-        - Pillow (PIL Software License, similar to MIT)<br>
-        - PyQt5 (GPL v3)<br>
-        - PyQt5_sip (GPL v3)<br>
-        - requests (Apache-2.0)<br>
-        - scipy (BSD License)<br>
+        Called by app_shell to push WEF (and any other shared params) into the
+        Analyze tab without rebuilding the full analyzer object.
         """
-        text_label = QLabel(about_text)
-        text_label.setTextFormat(Qt.RichText)
-        text_label.setOpenExternalLinks(True)  # Make GitHub link clickable
-        text_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        layout.addWidget(text_label)
+        self.parameters.update(params)
+        try:
+            self.analyzer.update_parameters(params)
+        except Exception:
+            pass
+        if 'wind_effect_factor' in params:
+            try:
+                self.wind_effect_slider.set_value(
+                    float(params['wind_effect_factor']), silent=True)
+            except Exception:
+                pass
 
-        # OK button
-        ok_btn = QPushButton("OK")
-        ok_btn.clicked.connect(dialog.accept)
-        ok_btn.setFixedWidth(80)
-        ok_btn.setDefault(True)
-        ok_btn.setAutoDefault(True)
-        ok_btn.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(ok_btn, alignment=Qt.AlignCenter)
+    def apply_weather_from_tab(self, cfg: dict):
+        """Apply weather settings from the shared WeatherTab to Analyze.
 
-        dialog.exec_()
+        Updates wind_effect_factor and — for manual source — overrides the
+        preloaded weather samples so the next analysis uses manual conditions.
+        """
+        wef = float(cfg.get('wind_effect_factor', 0.40))
+        self.update_parameters({'wind_effect_factor': wef})
+
+        source = cfg.get('source', 'manual')
+        if source == 'manual':
+            t  = float(cfg.get('temperature_c',      15.0))
+            p  = float(cfg.get('pressure_hpa',       1013.25))
+            ws = float(cfg.get('wind_speed_ms',      0.0))
+            wd = float(cfg.get('wind_direction_deg', 0.0))
+            manual_sample = {
+                'distance': 0.0,
+                'weather_data': {
+                    'temperature':    t,
+                    'pressure':       p,
+                    'wind_speed':     ws,
+                    'wind_direction': wd,
+                },
+            }
+            self.preloaded_weather_samples = [manual_sample]
+            try:
+                self.analyzer.preloaded_weather_samples = [manual_sample]
+            except Exception:
+                pass
+        elif source == 'api':
+            api_result = cfg.get('api_result')
+            if api_result and api_result.get('weather_samples'):
+                # Convert fetch_weather_samples format → analyzer preloaded format.
+                # fetch: {distance, latitude, longitude, when, weather:{...}}
+                # analyzer: {distance, timestamp, weather_data:{...}}
+                analyze_samples = []
+                for s in api_result['weather_samples']:
+                    w = s.get('weather') or {}
+                    analyze_samples.append({
+                        'distance':    s.get('distance', 0.0),
+                        'timestamp':   s.get('when'),
+                        'weather_data': {
+                            'temperature':    w.get('temperature', 20.0),
+                            'pressure':       w.get('pressure', 1013.25),
+                            'wind_speed':     w.get('wind_speed', 0.0),
+                            'wind_direction': w.get('wind_direction', 0.0),
+                        },
+                    })
+                self.preloaded_weather_samples = analyze_samples
+                try:
+                    self.analyzer.preloaded_weather_samples = analyze_samples
+                except Exception:
+                    pass
+            # else: leave preloaded_weather_samples as-is (from file load).
 
     def _browse_fit_file(self):
         # Adjust to proper default path
@@ -1023,7 +1055,6 @@ class GUIInterface(QMainWindow):
         self.ride_data = None
         self.analysis_results = None
         self.preprocessed_segments = None
-        self.simulation_results = None
         self.segment_data_map = {}
 
         # API preload state
@@ -1048,8 +1079,6 @@ class GUIInterface(QMainWindow):
             uncleared.append("segments")
         if self.analysis_results:
             uncleared.append("analysis_summary")
-        if self.simulation_results:
-            uncleared.append("simulation_results")
         if self.segment_data_map:
             uncleared.append("segment_mapping")
         if self.preloaded_weather_samples:
@@ -1221,9 +1250,11 @@ class GUIInterface(QMainWindow):
         canvas.deleteLater()
 
     def _cleanup_results(self, full_reset=False):
-        if self.summary_text:
-            self.summary_text.clear()
-            self.summary_text.append("Run analysis to see results here")
+        if hasattr(self, 'summary_status_label'):
+            self.summary_status_label.setText("Run analysis to see results here")
+            self.summary_status_label.setVisible(True)
+        if hasattr(self, '_summary_results_widget'):
+            self._summary_results_widget.setVisible(False)
 
         if self.current_figure:
             # Keep canvas alive and clear figure to avoid draw_idle callbacks
@@ -1235,17 +1266,7 @@ class GUIInterface(QMainWindow):
         if full_reset:
             self.analysis_results = None
             self.preprocessed_segments = None
-            self.simulation_results = None
             self.segment_data_map = {}
-
-            if self.sim_summary_text:
-                self.sim_summary_text.clear()
-                self.sim_summary_text.append("Run simulation to see results here")
-
-            if self.sim_figure:
-                self.sim_figure.clear()
-                if self.sim_canvas:
-                    self.sim_canvas.draw()
 
             if self.map_webview:
                 self.map_webview.setHtml("<html><body><p>Run analysis to display map</p></body></html>")
@@ -1258,8 +1279,7 @@ class GUIInterface(QMainWindow):
         _mark_stage("ui:run_analysis:start")
 
         self._cleanup_results()
-        self.summary_text.clear()
-        self.summary_text.append("Running analysis...")
+        self.summary_status_label.setText("Running analysis…")
         self._save_parameters()
         self.analyzer.update_parameters(self.parameters)
         self.analyzer.preloaded_weather_samples = list(self.preloaded_weather_samples)
@@ -1278,8 +1298,6 @@ class GUIInterface(QMainWindow):
 
     def _on_worker_status(self, message):
         self.analysis_status.setText(message)
-        if self.summary_text:
-            self.summary_text.append(message)
         if self.file_status:
             self.file_status.append(message)
 
@@ -1290,11 +1308,11 @@ class GUIInterface(QMainWindow):
             self.progress.setRange(0, 100)
             self.progress.setValue(100)
             self.analysis_status.setText("Analysis complete!" if not error else "Analysis failed")
-            self.summary_text.clear()
 
             if error:
                 _mark_stage("ui:on_analysis_complete:error")
-                self.summary_text.append(f"<b>Error during analysis:</b> {error}")
+                self.summary_status_label.setText(f"Analysis failed: {error}")
+                self.summary_status_label.setVisible(True)
                 QMessageBox.critical(self, "Error", f"Analysis failed: {error}")
                 self.analysis_results = None
                 self.preprocessed_segments = None
@@ -1370,116 +1388,158 @@ class GUIInterface(QMainWindow):
         if not self.analysis_results:
             return
         r = self.analysis_results
-        t = self.summary_text
+        s = r.get('summary') or {}
+        ride = s.get('ride_info') or {}
 
-        t.append("=" * 100)
-        t.append("CDA ANALYSIS RESULTS")
-        t.append("=" * 100)
-        t.append("\nParameters used:")
-        for k, v in r['parameters'].items():
-            t.append(f"  {k}: {v}")
-        t.append("")
+        # ── Metric cards ──────────────────────────────────────────────────
+        self.card_cda.update_value(f"{s.get('weighted_cda', 0):.4f}")
+        self.card_cda_std.update_value(f"\u00b1{s.get('cda_std', 0):.4f}")
 
-        s = r['summary']
+        dist_ridden = ride.get('total_distance_m')
+        self.card_dist_ridden.update_value(
+            f"{dist_ridden / 1000:.1f} km" if dist_ridden is not None else "\u2014"
+        )
+        total_analysed = s.get('total_distance')
+        self.card_dist_analysed.update_value(
+            f"{total_analysed / 1000:.1f} km" if total_analysed is not None else "\u2014"
+        )
+        vw = s.get('avg_wind_component')
+        self.card_vw.update_value(f"{vw:+.2f} m/s" if vw is not None else "\u2014")
+        wdir = s.get('avg_wind_direction')
+        self.card_wind_dir.update_value(
+            f"{wdir:.0f}\u00b0"
+            if wdir is not None and not (isinstance(wdir, float) and wdir != wdir)
+            else "\u2014"
+        )
+        np_w = ride.get('normalized_power_w')
+        self.card_np.update_value(f"{np_w:.0f} W" if np_w is not None else "\u2014")
+        avg_pwr = ride.get('average_power_w')
+        self.card_avg_pwr.update_value(f"{avg_pwr:.0f} W" if avg_pwr is not None else "\u2014")
 
-        ride = s.get('ride_info') if s else None
+        # ── Details text (collapsible) ────────────────────────────────────
+        def _fmt(v, fmt, fallback="N/A"):
+            try:
+                if v is None or (isinstance(v, float) and v != v):
+                    return fallback
+                return format(v, fmt)
+            except Exception:
+                return fallback
+
+        lines = []
+        lines.append("Weather Conditions:")
+        lines.append(f"  Temperature:      {_fmt(s.get('avg_temp'),           '.1f')} \u00b0C")
+        lines.append(f"  Pressure:         {_fmt(s.get('avg_press'),          '.2f')} hPa")
+        lines.append(f"  Wind speed:       {_fmt(s.get('avg_wind_speed'),     '.1f')} m/s")
+        lines.append(f"  Wind direction:   {_fmt(s.get('avg_wind_direction'), '.1f')} \u00b0")
+        lines.append("")
         if ride:
-            t.append("Ride Information:")
-            t.append(f"  Date: {ride.get('date', 'N/A')}")
-            t.append(f"  Start time: {ride.get('start_time', 'N/A')}")
-            t.append(f"  End time: {ride.get('end_time', 'N/A')}")
-            t.append(
-                f"  Total duration: {ride.get('duration_hms', 'N/A')} "
+            lines.append("Ride Information:")
+            lines.append(f"  Date:             {ride.get('date', 'N/A')}")
+            lines.append(f"  Start:            {ride.get('start_time', 'N/A')}")
+            lines.append(f"  End:              {ride.get('end_time', 'N/A')}")
+            lines.append(
+                f"  Duration:         {ride.get('duration_hms', 'N/A')} "
                 f"({ride.get('duration_seconds', 'N/A')} s)"
             )
-            if ride.get('total_distance_m') is not None:
-                t.append(f"  Total distance: {ride['total_distance_m']:.0f} m")
-            if ride.get('average_speed_kmh') is not None:
-                t.append(f"  Average speed: {ride['average_speed_kmh']:.2f} km/h")
-            if ride.get('average_power_w') is not None:
-                t.append(f"  Average power: {ride['average_power_w']:.1f} W")
-            if ride.get('average_heart_rate_bpm') is not None:
-                t.append(f"  Average heart rate: {ride['average_heart_rate_bpm']:.1f} bpm")
-            if ride.get('normalized_power_w') is not None:
-                t.append(f"  NP: {ride['normalized_power_w']:.1f} W")
-            if ride.get('elevation_gain_m') is not None:
-                t.append(f"  Elevation Gain: {ride['elevation_gain_m']:.1f} m")
-            t.append("")
-
-        s = r['summary']
-
+            if dist_ridden is not None:
+                lines.append(f"  Distance:         {dist_ridden:.0f} m")
+            avg_spd = ride.get('average_speed_kmh')
+            if avg_spd is not None:
+                lines.append(f"  Avg speed:        {avg_spd:.2f} km/h")
+            avg_hr = ride.get('average_heart_rate_bpm')
+            if avg_hr is not None:
+                lines.append(f"  Avg heart rate:   {avg_hr:.1f} bpm")
+            elev_gain = ride.get('elevation_gain_m')
+            if elev_gain is not None:
+                lines.append(f"  Elevation gain:   {elev_gain:.1f} m")
+            lines.append("")
         if s:
-            avg_temp = s.get('avg_temp')
-            avg_press = s.get('avg_press')
-            avg_wind  = s.get('avg_wind_speed')
-            avg_dir   = s.get('avg_wind_direction')
-            t.append("Weather Conditions:")
-            t.append(f"  Average temperature: {avg_temp:.1f} °C" if avg_temp is not None and not (isinstance(avg_temp, float) and avg_temp != avg_temp) else "  Average temperature: N/A")
-            t.append(f"  Average pressure: {avg_press:.2f} hPa" if avg_press is not None and not (isinstance(avg_press, float) and avg_press != avg_press) else "  Average pressure: N/A")
-            t.append(f"  Average wind speed: {avg_wind:.1f} m/s" if avg_wind is not None else "  Average wind speed: N/A")
-            t.append(f"  Average wind direction: {avg_dir:.2f} °" if avg_dir is not None and not (isinstance(avg_dir, float) and avg_dir != avg_dir) else "  Average wind direction: N/A")
-
-        t.append(f"Segment Analysis ({len(r['segments'])} steady segments found):")
-        t.append("-" * 250)
-        elevation_source = self.parameters.get('elevation_source', 'open_elevation')
-        # Always show both elevation columns if we have API data
-        has_api_elevation = any(s.get('elevation_api_mean') is not None for s in r['segments'])
-        
-        if has_api_elevation:
-            t.append(f"{'ID':<3}\t{'Dur':>6}\t{'Dist':>8}\t{'Elev FIT':>8}\t{'Elev API':>8}\t{'v_g':>6}\t{'v_w':>7}\t{'v_a':>6}\t{'w_angle':>6}\t{'Yaw':>5}\t{'Slope':>6}\t{'Power':>6}\t{'CdA':>7}")
-            t.append(f"{'':3}\t{'(s)':>6}\t{'(m)':>8}\t{'(m)':>8}\t{'(m)':>8}\t{'m/s':>6}\t{'m/s':>7}\t{'m/s':>6}\t{'(deg)':>6}\t{'(deg)':>5}\t{'(deg)':>6}\t{'(W)':>6}\t{'':>7}")
-        else:
-            t.append(f"{'ID':<3}\t{'Dur':>6}\t{'Dist':>8}\t{'Elev':>6}\t{'v_g':>6}\t{'v_w':>7}\t{'v_a':>6}\t{'w_angle':>6}\t{'Yaw':>5}\t{'Slope':>6}\t{'Power':>6}\t{'CdA':>7}")
-            t.append(f"{'':3}\t{'(s)':>6}\t{'(m)':>8}\t{'(m)':>6}\t{'m/s':>6}\t{'m/s':>7}\t{'m/s':>6}\t{'(deg)':>6}\t{'(deg)':>5}\t{'(deg)':>6}\t{'(W)':>6}\t{'':>7}")
-        t.append("-" * 250)
-        s = r['summary'] if r.get('summary') else {}
-        for s in r['segments']:
-            # Use precomputed yaw from analyzer
-            yaw = s.get('yaw', 0.0)
-            
-            if has_api_elevation:
-                fit_elev = s.get('elevation_fit_mean')
-                api_elev = s.get('elevation_api_mean')
-                fit_str = f"{fit_elev:>8.0f}" if fit_elev is not None else f"{'N/A':>8}"
-                api_str = f"{api_elev:>8.0f}" if api_elev is not None else f"{'N/A':>8}"
-                t.append(
-                    f"{s['segment_id']:<3}\t{s['duration']:>6.0f}\t{s['distance']:>8.0f}\t"
-                    f"{fit_str}\t{api_str}\t{s.get('v_ground', s['speed']):>6.2f}\t{s.get('v_wind', s['effective_wind']):>+7.2f}\t{s.get('v_air', s['air_speed']):>6.2f}\t"
-                    f"{s['wind_angle']:>6.0f}\t{yaw:>5.1f}\t{s['slope']:>6.1f}\t{s['power']:>6.0f}\t{s['cda']:>7.4f}"
-                )
-            else:
-                elev = s.get('elevation_fit_mean') if s.get('elevation_fit_mean') is not None else 0
-                elev_str = f"{elev:>6.0f}" if elev is not None else f"{'N/A':>6}"
-                t.append(
-                    f"{s['segment_id']:<3}\t{s['duration']:>6.0f}\t{s['distance']:>8.0f}\t"
-                    f"{elev_str}\t{s.get('v_ground', s['speed']):>6.2f}\t{s.get('v_wind', s['effective_wind']):>+7.2f}\t{s.get('v_air', s['air_speed']):>6.2f}\t"
-                    f"{s['wind_angle']:>6.0f}\t{yaw:>5.1f}\t{s['slope']:>6.1f}\t{s['power']:>6.0f}\t{s['cda']:>7.4f}"
-                )
-        t.append("\nSummary:")
-        t.append("-" * 100)
-
-        s = r['summary']
-
-        if s:
-            t.append(f"Total segments analyzed: {s['total_segments']}")
-            t.append(f"GPS coords: {'Yes' if s.get('has_gps_coordinates', False) else 'No'}  |  Elev source: {s.get('elevation_source', 'Unknown')}")
-            keep_percent = s.get('keep_percent', self.analyzer.parameters.get('cda_keep_percent', 80.0))
-            kept_used = s.get('kept_segments_used', s['total_segments'])
-            t.append(f"Weighted CdA (all segments): {s.get('weighted_cda_all', s['weighted_cda']):.4f}")
-            t.append(f"Weighted CdA ({keep_percent:.0f}%): {s.get('weighted_cda_kept', s['weighted_cda']):.4f} [{kept_used} segments]")
-            t.append(f"Average CdA: {s['average_cda']:.4f}")
-            t.append(f"CdA standard deviation: {s['cda_std']:.4f}")
+            keep_pct  = s.get('keep_percent', self.analyzer.parameters.get('cda_keep_percent', 80.0))
+            kept_used = s.get('kept_segments_used', s.get('total_segments', 0))
+            lines.append("Analysis Statistics:")
+            lines.append(f"  Segments total:   {s.get('total_segments', 0)}")
+            lines.append(
+                f"  GPS coords:       {'Yes' if s.get('has_gps_coordinates') else 'No'}"
+                f"  |  Elev source: {s.get('elevation_source', 'Unknown')}"
+            )
+            lines.append(f"  Weighted CdA (all):  {s.get('weighted_cda_all', s.get('weighted_cda', 0)):.4f}")
+            lines.append(f"  Weighted CdA ({keep_pct:.0f}%): {s.get('weighted_cda_kept', s.get('weighted_cda', 0)):.4f}  [{kept_used} segs]")
+            lines.append(f"  Average CdA:      {s.get('average_cda', 0):.4f}")
+            lines.append(f"  CdA std dev:      {s.get('cda_std', 0):.4f}")
             if s.get('wind_coefficients'):
                 a, b, c = s['wind_coefficients']
-                t.append(f"Wind Angle Formula: CdA = {a:.2e}*θ² + {b:.2e}*θ + {c:.2e}")
-            t.append(f"Average wind speed (meteo): {s['avg_wind_speed']:.1f} m/s")
-            t.append(f"Average ground speed  v_g: {s.get('avg_ground_speed', 0):.2f} m/s")
-            t.append(f"Average wind component v_w: {s.get('avg_wind_component', 0):+.2f} m/s  (+headwind / -tailwind)")
-            t.append(f"Average air speed      v_a: {s['avg_air_speed']:.2f} m/s")
-            t.append(f"Total analysis duration: {s['total_duration']:.0f} seconds")
-            t.append(f"Total distance analyzed: {s['total_distance']:.0f} meters")
+                lines.append(f"  Wind formula:     CdA = {a:.2e}\u00b7\u03b8\u00b2 + {b:.2e}\u00b7\u03b8 + {c:.2e}")
+            lines.append(f"  v_g (ground):     {s.get('avg_ground_speed', 0):.2f} m/s")
+            lines.append(f"  v_w (wind):       {s.get('avg_wind_component', 0):+.2f} m/s  (+head / \u2212tail)")
+            lines.append(f"  v_a (air):        {s.get('avg_air_speed', 0):.2f} m/s")
+            lines.append(f"  Duration analysed:{s.get('total_duration', 0):.0f} s")
+            lines.append(f"  Distance analysed:{s.get('total_distance', 0):.0f} m")
+            lines.append("")
+            lines.append("Parameters:")
+            for k, v in r.get('parameters', {}).items():
+                lines.append(f"  {k}: {v}")
+        self.details_text.setPlainText("\n".join(lines))
+
+        # ── Segment table ─────────────────────────────────────────────────
+        segments = r.get('segments', [])
+        has_api = any(seg.get('elevation_api_mean') is not None for seg in segments)
+        if has_api:
+            headers    = ["ID", "Dur (s)", "Dist (m)", "Elev FIT", "Elev API",
+                          "v_g", "v_w", "v_a", "Bearing", "w_angle", "Yaw", "Slope", "Power", "CdA"]
+            col_widths = [35, 55, 65, 65, 65, 55, 65, 55, 60, 60, 50, 55, 60, 70]
         else:
-            t.append("No steady segments found.")
+            headers    = ["ID", "Dur (s)", "Dist (m)", "Elev FIT",
+                          "v_g", "v_w", "v_a", "Bearing", "w_angle", "Yaw", "Slope", "Power", "CdA"]
+            col_widths = [35, 55, 65, 65, 55, 65, 55, 60, 60, 50, 55, 60, 70]
+        self.segment_table.setColumnCount(len(headers))
+        self.segment_table.setHorizontalHeaderLabels(headers)
+        for i, w in enumerate(col_widths):
+            self.segment_table.setColumnWidth(i, w)
+        self.segment_table.setRowCount(len(segments))
+        for row, seg in enumerate(segments):
+            yaw      = seg.get('yaw', 0.0)
+            fit_elev = seg.get('elevation_fit_mean')
+            api_elev = seg.get('elevation_api_mean')
+            if has_api:
+                vals = [
+                    str(seg['segment_id']),
+                    f"{seg['duration']:.0f}",
+                    f"{seg['distance']:.0f}",
+                    f"{fit_elev:.0f}" if fit_elev is not None else "N/A",
+                    f"{api_elev:.0f}" if api_elev is not None else "N/A",
+                    f"{seg.get('v_ground', seg['speed']):.2f}",
+                    f"{seg.get('v_wind', seg['effective_wind']):+.2f}",
+                    f"{seg.get('v_air', seg['air_speed']):.2f}",
+                    f"{seg.get('bearing', 0.0):.0f}\u00b0",
+                    f"{seg['wind_angle']:.0f}",
+                    f"{yaw:.1f}",
+                    f"{seg['slope']:.1f}",
+                    f"{seg['power']:.0f}",
+                    f"{seg['cda']:.4f}",
+                ]
+            else:
+                vals = [
+                    str(seg['segment_id']),
+                    f"{seg['duration']:.0f}",
+                    f"{seg['distance']:.0f}",
+                    f"{fit_elev:.0f}" if fit_elev is not None else "N/A",
+                    f"{seg.get('v_ground', seg['speed']):.2f}",
+                    f"{seg.get('v_wind', seg['effective_wind']):+.2f}",
+                    f"{seg.get('v_air', seg['air_speed']):.2f}",
+                    f"{seg.get('bearing', 0.0):.0f}\u00b0",
+                    f"{seg['wind_angle']:.0f}",
+                    f"{yaw:.1f}",
+                    f"{seg['slope']:.1f}",
+                    f"{seg['power']:.0f}",
+                    f"{seg['cda']:.4f}",
+                ]
+            for col, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.segment_table.setItem(row, col, item)
+
+        self.summary_status_label.setVisible(False)
+        self._summary_results_widget.setVisible(True)
 
         
 
@@ -1762,397 +1822,6 @@ class GUIInterface(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Export failed: {str(e)}")
 
-    def _on_simulation_params_changed(self):
-        """SliderRow spinboxes already display live values; nothing extra needed."""
-        pass
-
-    def _run_simulation(self):
-        """Run weather simulation with manual wind parameters"""
-        if not self.analysis_results or self.ride_data is None:
-            QMessageBox.critical(self, "Error", "Please run analysis first")
-            return
-        
-        try:
-            wind_speed = self.sim_wind_speed_slider.value() + 0.000001
-            wind_angle = self.sim_wind_angle_slider.value()
-            wind_factor = self.sim_wind_factor_slider.value()
-            temperature = float(self.sim_temp_entry.text())
-            pressure = float(self.sim_pressure_entry.text())
-
-            
-            self.sim_summary_text.clear()
-            self.sim_summary_text.append(f"Running simulation with:\n- Wind Speed: {wind_speed:.1f} m/s\n- Wind Angle: {wind_angle}°\n- Wind Effect Factor: {wind_factor:.2f}\n\nProcessing segments...")
-            #self.simulation_notebook.setCurrentWidget(self.sim_summary_frame)
-            
-            # Calculate simulated results
-            self.simulation_results = self._calculate_simulation_results(wind_speed, wind_angle, wind_factor, temperature, pressure)
-            
-            if not self.simulation_results:
-                self.sim_summary_text.append("\nError: No valid segments found in simulation!")
-                return
-            
-            # Display results
-            self._display_simulation_results(wind_speed, wind_angle, wind_factor, temperature, pressure)
-            
-            # Generate plots
-            self._generate_simulation_plots()
-            
-            self.sim_summary_text.append("\n\nSimulation complete!")
-            
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            QMessageBox.critical(self, "Error", f"Simulation failed: {str(e)}")
-
-    def _calculate_simulation_results(self, wind_speed, wind_angle, wind_factor, temperature, pressure):
-        """Calculate CdA results with simulated wind conditions"""
-        if not self.analysis_results or not self.preprocessed_segments:
-            return None
-        
-        simulation_results = []
-        
-        # Use the preprocessed segments from the original analysis
-        for i, segment_df in enumerate(self.preprocessed_segments):
-            # Create weather data with simulated wind
-            # Must include both temperature+pressure for air_density calculation, and wind parameters
-            weather_data = {
-                'wind_speed': wind_speed,
-                'wind_direction': wind_angle,
-                'air_density': 0.001,
-                'temperature': temperature,
-                'pressure': pressure
-            }
-            
-            if len(segment_df) < 10:
-                continue
-            
-            # Update analyzer with simulation wind factor
-            orig_factor = self.analyzer.parameters['wind_effect_factor']
-            try:
-                self.analyzer.update_parameters({'wind_effect_factor': wind_factor})
-                # Calculate CdA with simulated wind
-                result = self.analyzer.calculate_cda_for_segment(segment_df, weather_data)
-            finally:
-                # Always restore the original factor, even if an exception is raised
-                self.analyzer.update_parameters({'wind_effect_factor': orig_factor})
-            
-            if result:
-                start_elev = float(segment_df['altitude'].iloc[0]) if 'altitude' in segment_df.columns and not segment_df['altitude'].isna().all() else None
-                start_elev_fit = float(segment_df['altitude_fit'].iloc[0]) if 'altitude_fit' in segment_df.columns and not segment_df['altitude_fit'].isna().all() else None
-                start_elev_api = float(segment_df['altitude_api'].iloc[0]) if 'altitude_api' in segment_df.columns and not segment_df['altitude_api'].isna().all() else None
-                result.update({
-                    'segment_id': i,
-                    'start_time': segment_df['timestamp'].iloc[0],
-                    'end_time': segment_df['timestamp'].iloc[-1],
-                    'start_elevation': start_elev,
-                    'start_elevation_fit': start_elev_fit,
-                    'start_elevation_api': start_elev_api,
-                })
-                simulation_results.append(result)
-        return simulation_results
-
-    def _display_simulation_results(self, wind_speed, wind_angle, wind_factor, temperature, pressure):
-        """Display simulation results in summary"""
-        if not self.simulation_results:
-            self.sim_summary_text.clear()
-            self.sim_summary_text.append("No results to display")
-            return
-
-        self.sim_summary_text.clear()
-        t = self.sim_summary_text
-
-        # --- Header (now identical to analysis summary formatting) ---
-        t.append("=" * 100)
-        t.append("WEATHER SIMULATION RESULTS")
-        t.append("=" * 100)
-        t.append("")  # blank line for consistent spacing
-
-        # --- Simulation Parameters ---
-        t.append("Simulation Parameters:")
-        t.append(f"  Wind Speed: {wind_speed:.1f} m/s")
-        t.append(f"  Wind Angle: {wind_angle}°")
-        t.append(f"  Wind Effect Factor: {wind_factor:.2f}")
-        t.append(f"  Temperature: {temperature:.2f}")
-        t.append(f"  Pressure: {pressure:.2f}\n")
-
-        # --- Segment Table Header ---
-        has_api_elevation = any(s.get('elevation_api_mean') is not None for s in self.simulation_results)
-        has_gps = 'latitude' in self.ride_data.columns if self.ride_data is not None else False
-        t.append(f"Segment Results ({len(self.simulation_results)} segments):")
-        t.append("-" * 250)
-        if has_api_elevation:
-            t.append(f"{'ID':<3}\t{'Dur':>6}\t{'Dist':>8}\t{'Elev FIT':>8}\t{'Elev API':>8}\t{'v_g':>6}\t{'v_w':>7}\t{'v_a':>6}\t"
-                    f"{'w_angle':>6}\t{'Yaw':>5}\t{'Slope':>6}\t{'Power':>6}\t{'CdA':>7}")
-            t.append(f"{'':3}\t{'(s)':>6}\t{'(m)':>8}\t{'(m)':>8}\t{'(m)':>8}\t{'m/s':>6}\t{'m/s':>7}\t{'m/s':>6}\t"
-                    f"{'(deg)':>6}\t{'(deg)':>5}\t{'(deg)':>6}\t{'(W)':>6}\t{'':>7}")
-        else:
-            t.append(f"{'ID':<3}\t{'Dur':>6}\t{'Dist':>8}\t{'Elev':>6}\t{'v_g':>6}\t{'v_w':>7}\t{'v_a':>6}\t"
-                    f"{'w_angle':>6}\t{'Yaw':>5}\t{'Slope':>6}\t{'Power':>6}\t{'CdA':>7}")
-            t.append(f"{'':3}\t{'(s)':>6}\t{'(m)':>8}\t{'(m)':>6}\t{'m/s':>6}\t{'m/s':>7}\t{'m/s':>6}\t"
-                    f"{'(deg)':>6}\t{'(deg)':>5}\t{'(deg)':>6}\t{'(W)':>6}\t{'':>7}")
-        t.append("-" * 200)
-
-        # --- Segment Rows ---
-        for s in self.simulation_results:
-            # Use precomputed yaw from analyzer
-            yaw = s.get('yaw', 0.0)
-            
-            if has_api_elevation:
-                fit_elev = s.get('elevation_fit_mean')
-                api_elev = s.get('elevation_api_mean')
-                fit_str = f"{fit_elev:>8.0f}" if fit_elev is not None else f"{'N/A':>8}"
-                api_str = f"{api_elev:>8.0f}" if api_elev is not None else f"{'N/A':>8}"
-                t.append(
-                    f"{s['segment_id']:<3}\t{s['duration']:>6.0f}\t{s['distance']:>8.0f}\t"
-                    f"{fit_str}\t{api_str}\t{s.get('v_ground', s['speed']):>6.2f}\t{s.get('v_wind', s['effective_wind']):>+7.2f}\t{s.get('v_air', s['air_speed']):>6.2f}\t"
-                    f"{s['wind_angle']:>6.0f}\t{yaw:>5.1f}\t{s['slope']:>6.1f}\t{s['power']:>6.0f}\t{s['cda']:>7.4f}"
-                )
-            else:
-                fit_elev = s.get('elevation_fit_mean')
-                elev_str = f"{fit_elev:>6.0f}" if fit_elev is not None else f"{'N/A':>6}"
-                t.append(
-                    f"{s['segment_id']:<3}\t{s['duration']:>6.0f}\t{s['distance']:>8.0f}\t"
-                    f"{elev_str}\t{s.get('v_ground', s['speed']):>6.2f}\t{s.get('v_wind', s['effective_wind']):>+7.2f}\t{s.get('v_air', s['air_speed']):>6.2f}\t"
-                    f"{s['wind_angle']:>6.0f}\t{yaw:>5.1f}\t{s['slope']:>6.1f}\t{s['power']:>6.0f}\t{s['cda']:>7.4f}"
-                )
-
-        # --- Summary Section ---
-        t.append("\nSummary:")
-        t.append("-" * 100)
-
-        cda_values = [s['cda'] for s in self.simulation_results]
-
-        if cda_values:
-            weighted_metrics = self.analyzer._calculate_weighted_cda_metrics(self.simulation_results)
-            weighted_all = weighted_metrics['weighted_cda_all']
-            weighted_kept = weighted_metrics['weighted_cda_kept']
-            keep_percent = weighted_metrics['keep_percent']
-            kept_used = weighted_metrics['kept_segments_used']
-            t.append(f"GPS coords: {'Yes' if hasattr(self.ride_data, 'latitude') and 'latitude' in self.ride_data.columns else 'No'}  |  Elev source: {self.analyzer.elevation_source if self.analyzer.elevation_source else 'Unknown'}")
-            t.append(f"Weighted CdA (all segments): {weighted_all:.4f}")
-            t.append(f"Weighted CdA ({keep_percent:.0f}%): {weighted_kept:.4f} [{kept_used} segments]")
-            t.append(f"Average CdA: {np.mean(cda_values):.4f}")
-            t.append(f"CdA standard deviation: {np.std(cda_values):.4f}")
-            t.append(f"Min CdA: {np.min(cda_values):.4f}")
-            t.append(f"Max CdA: {np.max(cda_values):.4f}")
-
-
-    def _fetch_missing_elevation_data(self):
-        """Fetch missing elevation data from Open-Elevation API after file load"""
-        from elevation import ElevationService
-        import numpy as np
-        
-        _logger.info("Fetching missing elevation API data for segments...")
-        
-        try:
-            # Collect all unique GPS coordinates from all segments
-            all_coords = []
-            for segment_df in self.preprocessed_segments:
-                if 'latitude' in segment_df.columns and 'longitude' in segment_df.columns:
-                    coords = segment_df[['latitude', 'longitude']].dropna()
-                    all_coords.extend(zip(coords['latitude'], coords['longitude']))
-            
-            if not all_coords:
-                _logger.warning("No GPS coordinates available for elevation lookup")
-                return
-            
-            # Deduplicate and fetch elevations
-            unique_coords = list(dict.fromkeys(all_coords))
-            elevation_service = ElevationService()
-            elevation_map = elevation_service.get_elevations_batch(unique_coords)
-            
-            if not elevation_map:
-                _logger.warning("Failed to fetch elevation data from API")
-                return
-            
-            # Add altitude_api column to each segment
-            for segment_df in self.preprocessed_segments:
-                if 'latitude' in segment_df.columns and 'longitude' in segment_df.columns:
-                    def get_elevation(row):
-                        key = (row['latitude'], row['longitude'])
-                        fit_alt = row.get('altitude_fit', row.get('altitude', np.nan))
-                        return elevation_map.get(key, fit_alt)
-                    
-                    segment_df['altitude_api'] = segment_df.apply(get_elevation, axis=1)
-            
-            self.analyzer.elevation_source = 'Open-Elevation API (fetched during simulation)'
-            _logger.info(f"Successfully fetched {len(elevation_map)} elevations from Open-Elevation API")
-        except Exception as e:
-            _logger.warning(f"Error fetching elevation data: {e}")
-    
-    def _generate_simulation_plots(self):
-        """Generate plots for simulation results"""
-        if not self.simulation_results or self.ride_data is None:
-            _logger.warning("No simulation results or ride data to plot.")
-            return
-        
-        try:
-            segments = self.simulation_results
-            if not segments:
-                return
-
-            colors = self._generate_segment_colors(len(segments))
-            colors_hex = [f"#{int(c[0]*255):02x}{int(c[1]*255):02x}{int(c[2]*255):02x}" for c in colors]
-
-            if self.sim_figure is None:
-                self.sim_figure = Figure(figsize=(16, 10))
-            else:
-                self.sim_figure.clear()
-            gs = self.sim_figure.add_gridspec(3, 2, hspace=0.45, wspace=0.3)
-
-            cda_vals = [s['cda'] for s in segments]
-            air_speeds = [s.get('air_speed', 0) for s in segments]
-            seg_ids = [s['segment_id'] for s in segments]
-            speeds = [s['speed'] for s in segments]
-            powers = [s['power'] for s in segments]
-            yaw_vals = [s.get('yaw', 0.0) for s in segments]
-            wind_angles = [s.get('wind_angle', 0) for s in segments]
-
-            # --- 1. Speed + Power vs Distance ---
-            ax1 = self.sim_figure.add_subplot(gs[0, 0])
-            ax1.plot(self.ride_data['distance']/1000, self.ride_data['speed'], 'lightgray', alpha=0.5, lw=1, label='Full ride (speed)')
-            for i, s in enumerate(segments):
-                idx = self.segment_data_map.get(s['segment_id'], [])
-                if not idx: continue
-                d = self.ride_data.iloc[idx]
-                ax1.plot(d['distance']/1000, d['speed'], color=colors[i], lw=2, alpha=0.9, label=f"Seg {s['segment_id']}")
-            ax1.set_title('Speed + Power vs Distance', fontsize=10, fontweight='bold')
-            ax1.set_xlabel('Distance (km)', fontsize=8)
-            ax1.set_ylabel('Speed (m/s)', fontsize=8, color='blue')
-            ax1.tick_params(axis='y', labelcolor='blue', labelsize=8)
-            ax1.tick_params(axis='x', labelsize=6)
-            ax1.grid(True, alpha=0.3)
-            if len(segments) <= 10:
-                ax1.legend(fontsize=6, loc='upper left')
-            ax1_r = ax1.twinx()
-            ax1_r.plot(self.ride_data['distance']/1000, self.ride_data['power'], color='orange', alpha=0.5, lw=1)
-            for i, s in enumerate(segments):
-                idx = self.segment_data_map.get(s['segment_id'], [])
-                if not idx: continue
-                d = self.ride_data.iloc[idx]
-                ax1_r.plot(d['distance']/1000, d['power'], color=colors[i], lw=2.5, alpha=0.8, linestyle='--')
-            ax1_r.set_ylabel('Power (W)', fontsize=8, color='red')
-            ax1_r.tick_params(axis='y', labelcolor='red', labelsize=8)
-
-            # --- 2. CdA by Segment ---
-            ax2 = self.sim_figure.add_subplot(gs[0, 1])
-            bars = ax2.bar(seg_ids, cda_vals, color=colors, alpha=0.8, edgecolor='k', linewidth=0.7)
-            ax2.set_title('CdA by Segment', fontsize=10, fontweight='bold')
-            ax2.set_xlabel('Segment ID', fontsize=8)
-            ax2.set_ylabel('CdA', fontsize=8)
-            ax2.tick_params(axis='x', labelsize=9)
-            ax2.grid(True, axis='y', alpha=0.3)
-            for bar, cda in zip(bars, cda_vals):
-                ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
-                         f'{cda:.3f}', ha='center', fontsize=5)
-
-            # --- 3. CdA vs Air Speed ---
-            ax3 = self.sim_figure.add_subplot(gs[1, 0])
-            ax3.scatter(air_speeds, cda_vals, c=colors, s=100, alpha=0.8, edgecolors='k', linewidth=0.5)
-            for i, sid in enumerate(seg_ids):
-                ax3.annotate(str(sid), (air_speeds[i], cda_vals[i]), xytext=(5, 5), textcoords='offset points', fontsize=6, alpha=0.8)
-            ax3.set_title('CdA vs Air Speed', fontsize=10, fontweight='bold')
-            ax3.set_xlabel('Air Speed (m/s)', fontsize=8)
-            ax3.set_ylabel('CdA', fontsize=8)
-            ax3.grid(True, alpha=0.3)
-
-            # --- 4. Speed vs Power ---
-            ax4 = self.sim_figure.add_subplot(gs[1, 1])
-            ax4.scatter(speeds, powers, c=colors, s=100, alpha=0.8, edgecolors='k', linewidth=0.5)
-            for i, sid in enumerate(seg_ids):
-                ax4.annotate(str(sid), (speeds[i], powers[i]), xytext=(5, 5), textcoords='offset points', fontsize=6, alpha=0.8)
-            ax4.set_title('Speed vs Power', fontsize=10, fontweight='bold')
-            ax4.set_xlabel('Speed (m/s)', fontsize=8)
-            ax4.set_ylabel('Power (W)', fontsize=8)
-            ax4.grid(True, alpha=0.3)
-
-            # --- 5. CdA vs Yaw ---
-            ax5 = self.sim_figure.add_subplot(gs[2, 0])
-            sc5 = ax5.scatter(yaw_vals, cda_vals, c=air_speeds, cmap='viridis', s=100, alpha=0.8, edgecolors='k', linewidth=0.5)
-            mask_20 = [abs(y) <= 20 for y in yaw_vals]
-            yv20 = [yaw_vals[i] for i in range(len(yaw_vals)) if mask_20[i]]
-            cv20 = [cda_vals[i] for i in range(len(cda_vals)) if mask_20[i]]
-            _yv = np.array(yv20, dtype=float)
-            _cv_yaw = np.array(cv20, dtype=float)
-            _valid_yaw = np.isfinite(_yv) & np.isfinite(_cv_yaw)
-            _yv, _cv_yaw = _yv[_valid_yaw], _cv_yaw[_valid_yaw]
-            if len(set(round(float(y), 1) for y in _yv)) >= 5 and np.ptp(_yv) > 0:
-                try:
-                    with np.errstate(divide='ignore', invalid='ignore'):
-                        co = np.polyfit(_yv, _cv_yaw, 4)
-                    x_fit = np.linspace(-20, 20, 200)
-                    ax5.plot(x_fit, np.poly1d(co)(x_fit), color='red', lw=1.5)
-                    ax5.text(0.95, 0.05, f"y={co[0]:.3e}x^4+{co[1]:.3e}x^3+{co[2]:.3e}x^2+{co[3]:.3e}x+{co[4]:.3e}", transform=ax5.transAxes,
-                             fontsize=7, color='red', ha='right', va='bottom', bbox=dict(facecolor='white', alpha=0.6))
-                except Exception:
-                    pass
-            for i, sid in enumerate(seg_ids):
-                ax5.annotate(str(sid), (yaw_vals[i], cda_vals[i]), xytext=(5, 5), textcoords='offset points', fontsize=6, alpha=0.8)
-            ax5.set_title('CdA vs Yaw Angle', fontsize=10, fontweight='bold')
-            ax5.set_xlabel('Yaw (\u00b0) \u2014 Crosswind from rider perspective', fontsize=8)
-            ax5.set_ylabel('CdA', fontsize=8)
-            ax5.set_xlim(-20, 20)
-            ax5.set_xticks([-20, -10, 0, 10, 20])
-            ax5.grid(True, alpha=0.3)
-            self.sim_figure.colorbar(sc5, ax=ax5).set_label('Air Speed (m/s)', fontsize=8)
-
-            # --- 6. CdA vs Wind Angle ---
-            ax6 = self.sim_figure.add_subplot(gs[2, 1])
-            sc6 = ax6.scatter(wind_angles, cda_vals, c=air_speeds, cmap='viridis', s=100, alpha=0.8, edgecolors='k', linewidth=0.5)
-            _wa = np.array(wind_angles, dtype=float)
-            _cv_wa = np.array(cda_vals, dtype=float)
-            _valid_wa = np.isfinite(_wa) & np.isfinite(_cv_wa)
-            _wa, _cv_wa = _wa[_valid_wa], _cv_wa[_valid_wa]
-            if len(set(round(float(w), 1) for w in _wa)) >= 3 and np.ptp(_wa) > 0:
-                try:
-                    with np.errstate(divide='ignore', invalid='ignore'):
-                        co6 = np.polyfit(_wa, _cv_wa, 2)
-                    x6 = np.linspace(-180, 180, 300)
-                    ax6.plot(x6, np.poly1d(co6)(x6), color='red', lw=1.5)
-                    ax6.text(0.98, 0.05, f"y={co6[0]:.3e}x\u00b2+{co6[1]:.3e}x+{co6[2]:.3e}", transform=ax6.transAxes,
-                             fontsize=7, color='red', ha='right', va='bottom', bbox=dict(facecolor='white', alpha=0.6))
-                except Exception:
-                    pass
-            for i, sid in enumerate(seg_ids):
-                ax6.annotate(str(sid), (wind_angles[i], cda_vals[i]), xytext=(5, 5), textcoords='offset points', fontsize=6, alpha=0.8)
-            ax6.set_title('CdA vs Wind Angle', fontsize=10, fontweight='bold')
-            ax6.set_xlabel('Wind Angle (\u00b0) \u2014 Headwind [\u00b1180\u00b0], Tailwind [0\u00b0]', fontsize=8)
-            ax6.set_ylabel('CdA', fontsize=8)
-            ax6.set_xlim(-180, 180)
-            ax6.set_xticks([-180, -135, -90, -45, 0, 45, 90, 135, 180])
-            ax6.grid(True, alpha=0.3)
-            self.sim_figure.colorbar(sc6, ax=ax6).set_label('Air Speed (m/s)', fontsize=8)
-
-            # Summary text
-            weighted_metrics = self.analyzer._calculate_weighted_cda_metrics(segments)
-            weighted_kept = weighted_metrics['weighted_cda_kept']
-            keep_percent = weighted_metrics['keep_percent']
-            std_cda = np.std(cda_vals)
-            total_distance = sum(s['distance'] for s in segments) / 1000
-            summary = (
-                f"Weighted CdA ({keep_percent:.0f}%): {weighted_kept:.3f}\n"
-                f"CdA Std Dev: {std_cda:.3f}\n"
-                f"Total Distance: {total_distance:.1f} km"
-            )
-            self.sim_figure.text(0.45, 0.015, summary, ha='center', va='bottom', fontsize=9, fontweight='bold',
-                                     bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.5'))
-
-            self.sim_figure.suptitle("Weather Simulation Plots", fontsize=12, fontweight='bold', y=0.99)
-            self.sim_figure.subplots_adjust(top=0.96, bottom=0.08, left=0.05, right=0.98)
-
-            # Create canvas once; then reuse it for future draws.
-            if self.sim_canvas is None:
-                self.sim_canvas = FigureCanvas(self.sim_figure)
-                if self.sim_plot_label and self.sim_plot_label.parent() is not None:
-                    self.sim_plot_label.setParent(None)
-                layout = self.sim_plot_frame.layout()
-                layout.addWidget(self.sim_canvas)
-
-            self.sim_canvas.draw()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error generating plots: {str(e)}")
-
     def closeEvent(self, event):
         self._cleanup_results()
         event.accept()
@@ -2176,6 +1845,8 @@ class GUIInterface(QMainWindow):
 
             # Update analyzer parameter
             self.analyzer.update_parameters({'wind_effect_factor': new_factor})
+            self.parameters['wind_effect_factor'] = new_factor
+            self.windEffectChanged.emit(new_factor)
 
             # Re-analyze with progress checkpoints so the bar visibly updates.
             self.progress.setRange(0, 100)
@@ -2207,7 +1878,6 @@ class GUIInterface(QMainWindow):
             QApplication.processEvents()
 
             # Display updated results
-            self.summary_text.clear()
             self._display_analysis_results()
 
             self.progress.setValue(82)

@@ -93,8 +93,12 @@ class ProfileTab(QWidget):
         self.f_climb_cda  = SliderRow("Climbing CdA",             0.10, 0.70, 0.310, 0.001,  3, "",   label_width=LW)
         self.f_ftp        = SliderRow("FTP",                      80,   600,  309,   1,      0, " W", label_width=LW)
         self.f_max_power  = SliderRow("Max power",               100,  2000,  400,   1,      0, " W", label_width=LW)
+        self.f_reserve    = SliderRow("W\u2019 reserve capacity",  5,    60,   20,   0.5,    1, " kJ", label_width=LW)
+        self.f_min_reserve= SliderRow("W\u2019 min reserve warn",  0,    40,   15,   0.5,    1, " kJ", label_width=LW)
+        self.f_decay      = SliderRow("W\u2019 reserve decay",     0.05, 0.60, 0.20, 0.01,   2, "",   label_width=LW)
         for w in [self.f_rider_mass, self.f_bike_mass, self.f_crr, self.f_dtloss,
-                  self.f_cda, self.f_climb_cda, self.f_ftp, self.f_max_power]:
+                  self.f_cda, self.f_climb_cda, self.f_ftp, self.f_max_power,
+                  self.f_reserve, self.f_min_reserve, self.f_decay]:
             box_layout.addWidget(w)
 
         # Notes (no slider — free text)
@@ -142,6 +146,9 @@ class ProfileTab(QWidget):
         self.f_climb_cda.set_value(rider.climbing_cda)
         self.f_ftp.set_value(rider.ftp)
         self.f_max_power.set_value(getattr(rider, 'max_power', 400.0))
+        self.f_reserve.set_value(getattr(rider, 'reserve_kj', 20.0))
+        self.f_min_reserve.set_value(getattr(rider, 'min_reserve_kj', 15.0))
+        self.f_decay.set_value(getattr(rider, 'reserve_decay', 0.20))
         self.f_notes.setPlainText(rider.notes)
         self._loading = False
 
@@ -156,6 +163,9 @@ class ProfileTab(QWidget):
             climbing_cda=self.f_climb_cda.value(),
             ftp=self.f_ftp.value(),
             max_power=self.f_max_power.value(),
+            reserve_kj=self.f_reserve.value(),
+            min_reserve_kj=self.f_min_reserve.value(),
+            reserve_decay=self.f_decay.value(),
             notes=self.f_notes.toPlainText().strip(),
         )
 

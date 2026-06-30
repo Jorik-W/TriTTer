@@ -236,11 +236,41 @@ def _load_fit(path: str, status_callback=None) -> CourseFile:
         course.cadence     = cadence
         course.temperature = temperature
 
-        # pick start time
-        for t in timestamps:
-            if t is not None:
-                course.start_time = t if isinstance(t, datetime) else getattr(t, "replace", lambda **k: t)()
-                break
+        # pick start time: use first point where speed > 0 for 3+ continuous minutes
+        _MIN_MOVING_SECONDS = 180.0
+        start_idx = None
+        if any(s is not None and s > 0 for s in speed):
+            _mov_start_idx = None
+            _mov_start_ts  = None
+            for _i, (_ts, _spd) in enumerate(zip(timestamps, speed)):
+                if _ts is None:
+                    _mov_start_idx = None
+                    _mov_start_ts  = None
+                    continue
+                if _spd is not None and _spd > 0:
+                    if _mov_start_idx is None:
+                        _mov_start_idx = _i
+                        _mov_start_ts  = _ts
+                    else:
+                        try:
+                            if (_ts - _mov_start_ts).total_seconds() >= _MIN_MOVING_SECONDS:
+                                start_idx = _mov_start_idx
+                                break
+                        except (TypeError, AttributeError):
+                            _mov_start_idx = _i
+                            _mov_start_ts  = _ts
+                else:
+                    _mov_start_idx = None
+                    _mov_start_ts  = None
+
+        # Fall back to first non-None timestamp
+        _first_ts_idx = next((i for i, t in enumerate(timestamps) if t is not None), None)
+        if start_idx is None:
+            start_idx = _first_ts_idx
+
+        if start_idx is not None:
+            t = timestamps[start_idx]
+            course.start_time = t if isinstance(t, datetime) else getattr(t, "replace", lambda **k: t)()
 
         _compute_derived(course)
         return course

@@ -8,6 +8,8 @@ This model assumes FTP is the threshold (FTP == CP) and applies:
 - reserve depletion/recovery simulation.
 """
 
+import heapq
+
 import numpy as np
 
 from physics import G, RHO, solve_speed
@@ -698,7 +700,7 @@ def simulate_reserve_balance(
     }
 
 
-def group_power_sections(sim_result, grades, distances, tolerance_w=None):
+def group_power_sections(sim_result, grades, distances, tolerance_w=None, target_segments=None):
     """Group consecutive segments by gradient and power continuity (course order)."""
     d_dist = np.diff(distances)
     n = min(len(grades), len(d_dist), len(sim_result['seg_power']))
@@ -968,12 +970,66 @@ def group_power_sections(sim_result, grades, distances, tolerance_w=None):
 
         return final_sections
 
+    def _bottom_up_merge(raw_sections, target_n):
+        """Heap-based bottom-up merge: repeatedly merge the adjacent pair with the
+        smallest power difference until len == target_n."""
+        n = len(raw_sections)
+        if target_n >= n or n <= 1:
+            return list(raw_sections)
+        target_n = max(1, int(target_n))
+
+        nodes = {}
+        for i, sec in enumerate(raw_sections):
+            nodes[i] = dict(sec)
+            nodes[i].update({'_id': i, '_prev': i - 1 if i > 0 else None,
+                              '_next': i + 1 if i < n - 1 else None, '_alive': True})
+
+        heap = []
+
+        def _push(lid, rid):
+            if lid is None or rid is None:
+                return
+            cost = abs(nodes[lid]['power'] - nodes[rid]['power'])
+            heapq.heappush(heap, (cost, lid, rid))
+
+        for i in range(n - 1):
+            _push(i, i + 1)
+
+        alive = n
+        while alive > target_n and heap:
+            cost, lid, rid = heapq.heappop(heap)
+            L, R = nodes.get(lid), nodes.get(rid)
+            if not L or not R or not L['_alive'] or not R['_alive']:
+                continue
+            if L['_next'] != rid or R['_prev'] != lid:
+                continue  # stale
+            merged = _merge_two_sections(L, R)
+            merged.update({'_id': lid, '_prev': L['_prev'],
+                           '_next': R['_next'], '_alive': True})
+            nodes[lid] = merged
+            if R['_next'] is not None:
+                nodes[R['_next']]['_prev'] = lid
+            nodes[rid]['_alive'] = False
+            alive -= 1
+            _push(merged['_prev'], lid)
+            _push(lid, merged['_next'])
+
+        head = next((s for s in nodes.values() if s['_alive'] and s['_prev'] is None), None)
+        result, cur = [], head
+        while cur is not None:
+            result.append({k: v for k, v in cur.items() if not k.startswith('_')})
+            cur = nodes[cur['_next']] if cur['_next'] is not None else None
+        return result
+
     sections = _merge_display_sections(sections, power_tolerance_w)
     sections = _normalize_sections(sections)
-    return sections, seg_target_power
+    natural_count = len(sections)
+    if target_segments is not None and 1 <= int(target_segments) < natural_count:
+        sections = _bottom_up_merge(sections, int(target_segments))
+    return sections, seg_target_power, natural_count
 
 
-def _finish_result(result, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j):
+def _finish_result(result, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j, target_segments=None):
     if result is None:
         return None
 
@@ -987,7 +1043,9 @@ def _finish_result(result, grades, distances, ftp, target_if, if_margin, min_res
     else:
         if_status = 'ok'
 
-    sections, seg_target_power = group_power_sections(result, grades, distances)
+    sections, seg_target_power, natural_count = group_power_sections(
+        result, grades, distances, target_segments=target_segments
+    )
     result.update({
         'ftp': ftp,
         'target_if': target_if,
@@ -1000,6 +1058,7 @@ def _finish_result(result, grades, distances, ftp, target_if, if_margin, min_res
         'distances_m': distances,
         'power_sections': sections,
         'seg_target_power': seg_target_power,
+        'natural_section_count': natural_count,
     })
     return result
 
@@ -1024,6 +1083,7 @@ def optimize_pacing(
     climb_cda=None,
     rho=RHO,
     wind=0.0,
+    target_segments=None,
 ):
     """Bisect pacing intensity k under IF target and fatigue-aware durability dynamics."""
     rho_is_arr = np.ndim(rho) > 0
@@ -1079,13 +1139,13 @@ def optimize_pacing(
         wind=wind,
     )
     if result_hi is None:
-        return _finish_result(result_lo, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j)
+        return _finish_result(result_lo, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j, target_segments)
 
     if result_lo['np_power'] > ftp * if_high:
-        return _finish_result(result_lo, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j)
+        return _finish_result(result_lo, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j, target_segments)
 
     if result_hi['np_power'] <= ftp * if_high:
-        return _finish_result(result_hi, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j)
+        return _finish_result(result_hi, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j, target_segments)
 
     best_result = result_lo
     target_np_high = ftp * if_high
@@ -1113,7 +1173,7 @@ def optimize_pacing(
             best_result = result
             break
 
-    return _finish_result(best_result, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j)
+    return _finish_result(best_result, grades, distances, ftp, target_if, if_margin, min_reserve_warn_j, target_segments)
 
 
 def aggregate_gradient_bands(sim_result, grades, distances):

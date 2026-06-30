@@ -8,11 +8,13 @@ style), which is the uniform input the project standardizes on.
 
 from PyQt5.QtWidgets import (
     QSizePolicy, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QFrame, QDoubleSpinBox,
-    QCheckBox,
+    QCheckBox, QCalendarWidget, QToolButton, QTableWidget, QTableWidgetItem,
+    QAbstractItemView, QApplication,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QIcon, QKeySequence
 
-from theme import ACCENT, CARD, TEXT, MUTED, BORDER
+from theme import ACCENT, CARD, TEXT, MUTED, BORDER, _CALENDAR_STYLE
 
 
 class SectionHeader(QWidget):
@@ -170,6 +172,20 @@ class SliderRow(QWidget):
         if not silent:
             self.valueChanged.emit(v)
 
+    def set_range(self, min_val, max_val, new_value=None, silent=True):
+        """Update slider range. Clamps current value to new range."""
+        self.min_val = min_val
+        self.max_val = max_val
+        self._steps = max(1, round((max_val - min_val) / self.step))
+        self.spin.blockSignals(True)
+        self.spin.setRange(min_val, max_val)
+        self.spin.blockSignals(False)
+        self.slider.blockSignals(True)
+        self.slider.setMaximum(self._steps)
+        self.slider.blockSignals(False)
+        target = new_value if new_value is not None else max(min_val, min(max_val, self.spin.value()))
+        self.set_value(target, silent=silent)
+
     def setEnabled(self, enabled):
         super().setEnabled(enabled)
         self.slider.setEnabled(enabled)
@@ -201,3 +217,60 @@ class CheckRow(QWidget):
 
     def setChecked(self, v):
         self.check.setChecked(v)
+
+
+class DarkCalendarWidget(QCalendarWidget):
+    """QCalendarWidget pre-styled to match the TriTTer dark theme.
+
+    Drop-in replacement for QCalendarWidget.  Grid is hidden, navigation
+    arrows are plain text glyphs (◀ ▶) so they inherit the stylesheet
+    colour instead of showing the system-theme icon.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setGridVisible(False)
+        self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        self.setMinimumSize(320, 260)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setStyleSheet(_CALENDAR_STYLE)
+        self._replace_nav_icons()
+
+    def _replace_nav_icons(self):
+        for name, glyph in (("qt_calendar_prevmonth", "◀"),
+                            ("qt_calendar_nextmonth", "▶")):
+            btn = self.findChild(QToolButton, name)
+            if btn:
+                btn.setIcon(QIcon())
+                btn.setText(glyph)
+                btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
+
+
+class CopyableTableWidget(QTableWidget):
+    """QTableWidget with Ctrl+C support for multi-cell TSV copy."""
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.Copy):
+            self.copy_selection()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def copy_selection(self):
+        indexes = self.selectedIndexes()
+        if not indexes:
+            return
+        indexes = sorted(indexes, key=lambda idx: (idx.row(), idx.column()))
+        min_row = indexes[0].row()
+        max_row = indexes[-1].row()
+        min_col = min(idx.column() for idx in indexes)
+        max_col = max(idx.column() for idx in indexes)
+        index_set = {(i.row(), i.column()) for i in indexes}
+        rows = []
+        for r in range(min_row, max_row + 1):
+            row_data = []
+            for c in range(min_col, max_col + 1):
+                item = self.item(r, c) if (r, c) in index_set else None
+                row_data.append(item.text() if item else "")
+            rows.append("\t".join(row_data))
+        QApplication.clipboard().setText("\n".join(rows))

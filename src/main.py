@@ -44,6 +44,13 @@ def _run_gui(argv):
         create_splash = None
         resource_path = None
 
+    # Fix taskbar title/icon on Windows PyInstaller onefile builds.
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TriTTer.App")
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
     try:
         from theme import apply_theme

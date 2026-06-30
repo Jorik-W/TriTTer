@@ -6,6 +6,9 @@ dark-flat palette and a stylesheet covering every widget type both tabs use
 the wizard step rail), so the whole app looks uniform.
 """
 
+from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import QToolButton
+
 # ---- Palette ---------------------------------------------------------------
 ACCENT  = "#3B7DD8"
 BG      = "#1E1E2E"
@@ -256,6 +259,83 @@ def apply_theme(app):
         _style_matplotlib()
     except Exception:
         pass
+
+
+_CALENDAR_STYLE = f"""
+    QCalendarWidget QWidget {{
+        background-color: {CARD};
+        alternate-background-color: {CARD};
+        color: {TEXT};
+    }}
+    QCalendarWidget QToolButton {{
+        color: {TEXT};
+        background-color: transparent;
+        border: none;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 13px;
+        padding: 5px 10px;
+        margin: 2px;
+    }}
+    QCalendarWidget QToolButton:hover {{
+        background-color: {SURFACE};
+        border-radius: 4px;
+    }}
+    QCalendarWidget QToolButton::menu-indicator {{
+        image: none;
+    }}
+    QCalendarWidget QMenu {{
+        background-color: {CARD};
+        color: {TEXT};
+        border: 1px solid {BORDER};
+    }}
+    QCalendarWidget QSpinBox {{
+        background-color: {SURFACE};
+        color: {TEXT};
+        border: 1px solid {BORDER};
+        border-radius: 4px;
+        padding: 2px 4px;
+    }}
+    QCalendarWidget QWidget#qt_calendar_navigationbar {{
+        background-color: {CARD};
+        border-bottom: 1px solid {BORDER};
+        padding: 4px;
+    }}
+    QCalendarWidget QAbstractItemView {{
+        background-color: {CARD};
+        alternate-background-color: {CARD};
+        color: {TEXT};
+        selection-background-color: {ACCENT};
+        selection-color: #ffffff;
+        outline: none;
+        font-size: 12px;
+        gridline-color: transparent;
+    }}
+    QCalendarWidget QAbstractItemView:disabled {{
+        color: #44485a;
+    }}
+    QCalendarWidget QAbstractItemView::item {{
+        padding: 4px 2px;
+        min-height: 24px;
+    }}
+"""
+
+
+def apply_calendar_style(calendar_widget):
+    """Apply the TriTTer dark theme to an existing QCalendarWidget.
+
+    Use ``DarkCalendarWidget`` for new widgets; call this only when the
+    widget is created externally (e.g. inside a QDateTimeEdit popup).
+    """
+    calendar_widget.setGridVisible(False)
+    calendar_widget.setMinimumSize(320, 260)
+    calendar_widget.setStyleSheet(_CALENDAR_STYLE)
+    for name, glyph in (("qt_calendar_prevmonth", "◀"),
+                        ("qt_calendar_nextmonth", "▶")):
+        btn = calendar_widget.findChild(QToolButton, name)
+        if btn:
+            btn.setIcon(QIcon())
+            btn.setText(glyph)
 
 
 def apply_dwm_dark_titlebar(hwnd: int):

@@ -9,42 +9,61 @@ from PyQt5.QtWidgets import (
     QPushButton, QTabWidget, QMessageBox,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QIcon
 
 from profiles import ProfileStore
 from profile_tab import ProfileTab
 from weather_tab import WeatherTab
 from open_file_tab import OpenFileTab
-from qt_gui import GUIInterface
+from qt_gui import GUIInterface, resource_path
 from plan_gui import PlanTab
 
 
 class _WeatherFetchWorker(QObject):
-    """Background thread worker: calls WeatherService.get_weather_data."""
+    """Background thread worker: fetches multi-point weather along a course."""
     finished = pyqtSignal(dict)   # result dict on success
     failed   = pyqtSignal(str)    # error string on failure
 
-    def __init__(self, lat, lon, ts):
+    def __init__(self, distances, latitudes, longitudes, timestamps, start_time, mode):
         super().__init__()
-        self._lat = lat
-        self._lon = lon
-        self._ts  = ts
+        self._distances  = distances
+        self._latitudes  = latitudes
+        self._longitudes = longitudes
+        self._timestamps = timestamps
+        self._start_time = start_time
+        self._mode       = mode
 
     def run(self):
         try:
-            from weather import WeatherService
-            svc = WeatherService()
-            data = svc.get_weather_data(self._lat, self._lon, self._ts)
-            # Normalise to the format show_fetch_result expects.
-            samples = [{
-                "temperature_2m":        data.get("temperature"),
-                "wind_speed_10m":        data.get("wind_speed"),
-                "wind_direction_10m":    data.get("wind_direction"),
-                "surface_pressure":      data.get("pressure"),
-                "relative_humidity_2m":  data.get("humidity"),
-            }]
-            self.finished.emit({"samples": samples, "available": True,
-                                 "sample_count": 1})
+            import sys, os
+            _plan_dir = os.path.normpath(
+                os.path.join(os.path.dirname(__file__), '..', 'plan'))
+            if _plan_dir not in sys.path:
+                sys.path.insert(0, _plan_dir)
+            from weather_plan import fetch_weather_samples
+            samples = fetch_weather_samples(
+                self._distances, self._latitudes, self._longitudes,
+                mode=self._mode,
+                start_time=self._start_time,
+                timestamps=self._timestamps,
+            )
+            if not samples:
+                self.finished.emit({"samples": [], "available": False,
+                                    "weather_samples": []})
+                return
+            display = [{
+                "temperature_2m":       s["weather"].get("temperature"),
+                "wind_speed_10m":       s["weather"].get("wind_speed"),
+                "wind_direction_10m":   s["weather"].get("wind_direction"),
+                "surface_pressure":     s["weather"].get("pressure"),
+                "relative_humidity_2m": s["weather"].get("humidity"),
+            } for s in samples if s.get("weather")]
+            self.finished.emit({
+                "samples":         display,
+                "available":       True,
+                "weather_samples": samples,
+                "sample_count":    len(samples),
+            })
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -55,9 +74,16 @@ class TriTTerWindow(QMainWindow):
         self.app = app
         self.setWindowTitle("TriTTer")
         self.resize(1280, 1040)
+        try:
+            self.setWindowIcon(QIcon(resource_path("icons/logo.PNG")))
+            app.setWindowIcon(QIcon(resource_path("icons/logo.PNG")))
+        except Exception:
+            pass
 
         self.store = ProfileStore()
         self._syncing = False
+        self._tab_fetch_thread = None   # keep alive until fetch completes
+        self._tab_fetch_worker = None
 
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -73,6 +99,7 @@ class TriTTerWindow(QMainWindow):
         self.open_file_tab = OpenFileTab()
         self.open_file_tab.fileLoaded.connect(self._on_file_loaded)
         self.open_file_tab.fileCleared.connect(self._on_file_cleared)
+        self.open_file_tab.manualCourseChanged.connect(self._on_manual_course_changed)
         self.tabs.addTab(self.open_file_tab, "Open File")
 
         # --- Weather tab (Phase 2) ---
@@ -87,6 +114,7 @@ class TriTTerWindow(QMainWindow):
 
         # --- Analyse tab ---
         self.analyze_gui = GUIInterface(app)
+        self.analyze_gui.windEffectChanged.connect(self._on_analyze_wef_changed)
         self._analyse_page = self._build_analyze_page()
         self.tabs.addTab(self._analyse_page, "Analyse")
 
@@ -146,19 +174,28 @@ class TriTTerWindow(QMainWindow):
         return page
 
     # ---- file loading ------------------------------------------------
+    @staticmethod
+    def _utc_to_local(st):
+        """Convert a UTC datetime (naive or aware) to a naive local datetime."""
+        import datetime as _dt
+        if st is None:
+            return None
+        if st.tzinfo is None:
+            st = st.replace(tzinfo=_dt.timezone.utc)
+        return st.astimezone(tz=None).replace(tzinfo=None)
+
     def _on_file_loaded(self, course):
         """A file was picked in the Open File tab — push to Analyse and Plan."""
         path = course.path
 
-        # Update Weather tab with the file's start time.
+        # Update Weather tab with the file's start time (convert UTC → local).
         if course.start_time is not None:
             from PyQt5.QtCore import QDateTime
             try:
-                import datetime
-                st = course.start_time
-                if hasattr(st, 'replace'):
-                    qdt = QDateTime(st.year, st.month, st.day,
-                                    st.hour, st.minute, st.second)
+                st_local = self._utc_to_local(course.start_time)
+                if st_local is not None:
+                    qdt = QDateTime(st_local.year, st_local.month, st_local.day,
+                                    st_local.hour, st_local.minute, st_local.second)
                     self.weather_tab.set_file_start_time(qdt)
             except Exception:
                 pass
@@ -197,6 +234,7 @@ class TriTTerWindow(QMainWindow):
         for page in (self._analyse_page, self._plan_page):
             idx = self.tabs.indexOf(page)
             self.tabs.setTabEnabled(idx, True)
+        self.weather_tab.clear_file_time()
         try:
             self.analyze_gui._clear_all_loaded_data_for_reload()
         except Exception:
@@ -214,59 +252,84 @@ class TriTTerWindow(QMainWindow):
                 self.weather_tab.show_fetch_result(
                     {}, error="Load a FIT/GPX file with GPS data first.")
                 return
-            # Pick a representative lat/lon (midpoint of route).
-            lats  = [v for v in course.latitudes  if v is not None]
-            lons  = [v for v in course.longitudes if v is not None]
-            if not lats:
+            if not course.latitudes or not any(v is not None for v in course.latitudes):
                 self.weather_tab.show_fetch_result(
                     {}, error="No GPS coordinates found in loaded file.")
                 return
-            mid = len(lats) // 2
-            lat, lon = lats[mid], lons[mid]
 
-            # Determine the requested timestamp.
             import datetime as _dt
+            from weather_plan import MODE_FORECAST, MODE_HISTORY
+
             time_mode = cfg.get("api_time_mode", "file")
-            if time_mode == "manual":
+            timestamps = None
+            start_time = None
+            mode = MODE_FORECAST
+
+            if time_mode == "file" and course.timestamps:
+                # Convert UTC → local; forward-fill None entries.
+                raw = [self._utc_to_local(t) if t is not None else None
+                       for t in course.timestamps]
+                filled = []
+                last = None
+                for t in raw:
+                    if t is not None:
+                        last = t
+                    filled.append(last)
+                # Back-fill any remaining leading Nones.
+                first_real = next((t for t in filled if t is not None), None)
+                if first_real is not None:
+                    filled = [t if t is not None else first_real for t in filled]
+                if any(t is not None for t in filled):
+                    timestamps = filled
+                    mode = MODE_HISTORY
+                else:
+                    start_time = self._utc_to_local(course.start_time) or _dt.datetime.now()
+            else:
                 qdt = cfg.get("api_datetime")
                 if qdt is not None:
-                    ts = _dt.datetime(qdt.date().year(), qdt.date().month(),
-                                      qdt.date().day(), qdt.time().hour(),
-                                      qdt.time().minute())
+                    start_time = _dt.datetime(
+                        qdt.date().year(), qdt.date().month(), qdt.date().day(),
+                        qdt.time().hour(), qdt.time().minute())
                 else:
-                    ts = course.start_time or _dt.datetime.now()
-            else:
-                ts = course.start_time or _dt.datetime.now()
+                    start_time = self._utc_to_local(course.start_time) or _dt.datetime.now()
 
-            self._run_weather_fetch(lat, lon, ts)
+            self._run_weather_fetch(
+                course.distances, course.latitudes, course.longitudes,
+                timestamps, start_time, mode)
             return
 
-        wef = cfg.get("wind_effect_factor", 0.40)
         if cfg.get("applies_analyse", True):
             try:
-                self.analyze_gui.update_parameters({"wind_effect_factor": wef})
+                self.analyze_gui.apply_weather_from_tab(cfg)
             except Exception:
                 pass
         if cfg.get("applies_plan", True):
             try:
-                self.plan_gui._weather_wef = wef
-                self.plan_gui._recalculate()
+                self.plan_gui.apply_weather_from_tab(cfg)
             except Exception:
                 pass
 
-    def _run_weather_fetch(self, lat, lon, ts):
-        """Start a background weather fetch and wire result back to weather_tab."""
+    def _run_weather_fetch(self, distances, latitudes, longitudes, timestamps, start_time, mode):
+        """Start a background multi-point weather fetch and wire result back to weather_tab."""
         thread = QThread(self)
-        worker = _WeatherFetchWorker(lat, lon, ts)
+        worker = _WeatherFetchWorker(distances, latitudes, longitudes,
+                                     timestamps, start_time, mode)
         worker.moveToThread(thread)
+        # Keep strong Python references so GC doesn't collect before the signal fires.
+        self._tab_fetch_thread = thread
+        self._tab_fetch_worker = worker
 
         def on_done(result):
             self.weather_tab.show_fetch_result(result)
             thread.quit()
+            self._tab_fetch_thread = None
+            self._tab_fetch_worker = None
 
         def on_fail(err):
             self.weather_tab.show_fetch_result({}, error=err)
             thread.quit()
+            self._tab_fetch_thread = None
+            self._tab_fetch_worker = None
 
         thread.started.connect(worker.run)
         worker.finished.connect(on_done)
@@ -277,12 +340,25 @@ class TriTTerWindow(QMainWindow):
         thread.start()
 
     # ---- rider sync ---------------------------------------------------
+    def _on_analyze_wef_changed(self, value: float):
+        """Analyse WEF slider released — push to weather tab (which propagates back silently)."""
+        try:
+            self.weather_tab.s_wef.set_value(value, silent=False)
+        except Exception:
+            pass
+
     def _apply_rider(self, rider):
         if rider is None:
             return
         self.analyze_gui.apply_rider(rider)
         try:
             self.plan_gui.apply_rider(rider)
+        except Exception:
+            pass
+
+    def _on_manual_course_changed(self, dist_km, elev_m, climb_grad, desc_grad):
+        try:
+            self.plan_gui.set_manual_course(dist_km, elev_m, climb_grad, desc_grad)
         except Exception:
             pass
 

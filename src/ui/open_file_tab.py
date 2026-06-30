@@ -24,7 +24,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 
 from fit_loader import load_course_file, capability_check, CourseFile
-from widgets import SectionHeader
+from widgets import SectionHeader, SliderRow
 from theme import MUTED, TEXT, GREEN, ORANGE, RED_COL, BORDER, SURFACE, ACCENT
 
 
@@ -33,6 +33,7 @@ class OpenFileTab(QWidget):
 
     fileLoaded  = pyqtSignal(object)   # CourseFile
     fileCleared = pyqtSignal()
+    manualCourseChanged = pyqtSignal(float, float, float, float)  # dist_km, elev_m, climb_grad%, desc_grad%
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -127,6 +128,20 @@ class OpenFileTab(QWidget):
         )
         layout.addWidget(self.log)
 
+        # ── Manual course (shown when no file loaded) ─────────────────
+        self.manual_course_box = QGroupBox("Manual course (used by Plan when no file is loaded)")
+        mc_layout = QVBoxLayout(self.manual_course_box)
+        mc_layout.setSpacing(4)
+        mc_layout.setContentsMargins(8, 8, 8, 8)
+        self.mc_dist  = SliderRow("Distance",          0,   350, 180, 0.5, 1, " km", label_width=180)
+        self.mc_elev  = SliderRow("Elevation gain",     0,  5000, 2000, 50, 0, " m",  label_width=180)
+        self.mc_grad  = SliderRow("Climb gradient",     0.0,  15,  3.0, 0.1, 1, "%",  label_width=180)
+        self.mc_dgrad = SliderRow("Descent gradient",   0.0,  15,  3.0, 0.1, 1, "%",  label_width=180)
+        for s in [self.mc_dist, self.mc_elev, self.mc_grad, self.mc_dgrad]:
+            mc_layout.addWidget(s)
+            s.valueChanged.connect(self._on_manual_course_changed)
+        layout.addWidget(self.manual_course_box)
+
         layout.addStretch()
 
     # ------------------------------------------------------------------
@@ -150,6 +165,7 @@ class OpenFileTab(QWidget):
         self.status_label.setText("")
         self.info_box.setVisible(False)
         self.log.clear()
+        self.manual_course_box.setVisible(True)
         self.fileCleared.emit()
 
     # ------------------------------------------------------------------
@@ -205,6 +221,7 @@ class OpenFileTab(QWidget):
         )
         self._info_labels["channels"].setText(", ".join(chans) or "geometry only")
         self.info_box.setVisible(True)
+        self.manual_course_box.setVisible(False)
 
         self._append_log(
             f"Loaded {len(course.distances)} points  |  "
@@ -215,6 +232,14 @@ class OpenFileTab(QWidget):
         )
 
         self.fileLoaded.emit(course)
+
+    def _on_manual_course_changed(self, _=None):
+        self.manualCourseChanged.emit(
+            self.mc_dist.value(),
+            self.mc_elev.value(),
+            self.mc_grad.value(),
+            self.mc_dgrad.value(),
+        )
 
     def _set_error(self, msg: str):
         self._course = None

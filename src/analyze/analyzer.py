@@ -257,6 +257,13 @@ class CDAAnalyzer:
         # Weight-average the yaw values (circular mean not needed for yaw since it's typically small)
         avg_yaw = float(np.average(yaw_angles, weights=weights)) if yaw_angles else 0.0
 
+        # Circular weighted mean for bearing (0–360°)
+        bearings_rad = np.radians([r.get('bearing', 0.0) for r in sub_results])
+        avg_bearing = float((np.degrees(np.arctan2(
+            np.average(np.sin(bearings_rad), weights=weights),
+            np.average(np.cos(bearings_rad), weights=weights),
+        )) + 360) % 360)
+
         result = {
             'cda':          final_cda,
             'cda_std':      cda_std,
@@ -274,6 +281,7 @@ class CDAAnalyzer:
             'air_speed':    v_air,
             'wind_angle':   avg_wind_angle,
             'yaw':          avg_yaw,    # Crosswind angle from rider perspective
+            'bearing':      avg_bearing,  # Rider travel direction (0–360° true north)
             'subsegments':  sub_results,
             **averages,
         }
@@ -387,7 +395,7 @@ class CDAAnalyzer:
         df = df.copy()
         
         # Get elevation source from parameters, with fallback
-        elevation_source_param = self.parameters.get('elevation_source', 'open_elevation')
+        elevation_source_param = self.parameters.get('elevation_source', 'fit_only')
         df = self._calculate_slope(df, elevation_source=elevation_source_param)
         df = self._calculate_acceleration(df)
         
@@ -832,7 +840,8 @@ class CDAAnalyzer:
                 'effective_wind': effective_wind,
                 'air_speed': air_speed,
                 'wind_angle': wind_angle_deg,
-                'wind_speed': wind_speed
+                'wind_speed': wind_speed,
+                'bearing': segment_direction,
             }
         
         except Exception as e:

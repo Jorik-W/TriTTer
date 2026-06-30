@@ -13,13 +13,13 @@ The :attr:`weatherChanged` signal fires on every meaningful change.
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QRadioButton, QButtonGroup,
-    QPushButton, QPlainTextEdit, QGroupBox, QCheckBox, QDateTimeEdit,
-    QScrollArea, QSizePolicy,
+    QPushButton, QPlainTextEdit, QCheckBox, QDateTimeEdit,
+    QScrollArea, QFrame,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
 
-from widgets import SliderRow, SectionHeader
-from theme import MUTED, TEXT, ACCENT, SURFACE, BORDER, GREEN, ORANGE, RED_COL
+from widgets import SliderRow
+from theme import MUTED, TEXT, ACCENT, SURFACE, BORDER, GREEN, ORANGE, RED_COL, apply_calendar_style
 
 
 _NO_DATA_LABEL = "No weather data available for the selected time"
@@ -87,8 +87,21 @@ class WeatherTab(QWidget):
     def set_file_start_time(self, dt: QDateTime):
         """Called by the Open File tab when a new file is loaded."""
         self._file_dt = dt
+        self._time_file.setEnabled(True)
+        self._no_file_warning.setVisible(False)
         if self._time_file.isChecked():
-            self._update_api_time_label()
+            self.dt_pick.setDateTime(dt)
+            self.dt_pick.setEnabled(False)
+
+    def clear_file_time(self):
+        """Called when the loaded file is cleared."""
+        self._file_dt = None
+        self._time_file.setEnabled(False)
+        self._time_manual.setChecked(True)
+        self.dt_pick.setDateTime(QDateTime.currentDateTime())
+        self.dt_pick.setEnabled(True)
+        # Warning only shown when user is on "From file" mode with no file
+        self._no_file_warning.setVisible(False)
 
     # ------------------------------------------------------------------
     # Build UI
@@ -109,27 +122,28 @@ class WeatherTab(QWidget):
         inner = QWidget()
         layout = QVBoxLayout(inner)
         layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
         scroll.setWidget(inner)
 
         # ── Source selector ──────────────────────────────────────────
-        layout.addWidget(SectionHeader("Weather source"))
-
         src_row = QHBoxLayout()
-        self._src_manual = QRadioButton("Manual")
+        src_row.setSpacing(12)
         self._src_api    = QRadioButton("From API (Open-Meteo)")
-        self._src_manual.setChecked(True)
+        self._src_manual = QRadioButton("Manual")
+        self._src_api.setChecked(True)
         src_grp = QButtonGroup(self)
-        src_grp.addButton(self._src_manual)
         src_grp.addButton(self._src_api)
-        src_row.addWidget(self._src_manual)
+        src_grp.addButton(self._src_manual)
         src_row.addWidget(self._src_api)
+        src_row.addWidget(self._src_manual)
         src_row.addStretch()
         layout.addLayout(src_row)
 
         # ── Manual conditions ────────────────────────────────────────
-        self.manual_box = QGroupBox("Manual conditions")
-        mb_layout = QVBoxLayout(self.manual_box)
+        self.manual_widget = QWidget()
+        mb_layout = QVBoxLayout(self.manual_widget)
+        mb_layout.setContentsMargins(0, 4, 0, 4)
+        mb_layout.setSpacing(2)
         self.s_temp       = SliderRow("Temperature",      -20.0, 50.0, 20.0, 0.5, 1, " °C",  label_width=160)
         self.s_pressure   = SliderRow("Pressure",         900.0, 1100.0, 1013.25, 0.25, 1, " hPa", label_width=160)
         self.s_humidity   = SliderRow("Humidity",         0.0, 100.0, 60.0, 1.0, 0, " %",   label_width=160)
@@ -138,18 +152,23 @@ class WeatherTab(QWidget):
         for s in [self.s_temp, self.s_pressure, self.s_humidity, self.s_wind_speed, self.s_wind_dir]:
             mb_layout.addWidget(s)
             s.valueChanged.connect(self._on_changed)
-        layout.addWidget(self.manual_box)
+        layout.addWidget(self.manual_widget)
 
         # ── API conditions ───────────────────────────────────────────
-        self.api_box = QGroupBox("API conditions (Open-Meteo)")
-        ab_layout = QVBoxLayout(self.api_box)
+        self.api_widget = QWidget()
+        ab_layout = QVBoxLayout(self.api_widget)
+        ab_layout.setContentsMargins(0, 4, 0, 4)
+        ab_layout.setSpacing(4)
 
         time_row = QHBoxLayout()
+        time_row.setSpacing(12)
         time_lbl = QLabel("Time:")
-        time_lbl.setStyleSheet(f"color: {MUTED};")
-        self._time_file   = QRadioButton("From file's start time")
-        self._time_manual = QRadioButton("Pick date / time")
-        self._time_file.setChecked(True)
+        time_lbl.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+        time_lbl.setFixedWidth(90)
+        self._time_file   = QRadioButton("From file")
+        self._time_manual = QRadioButton("Manual")
+        self._time_file.setEnabled(False)   # disabled until a file is loaded
+        self._time_manual.setChecked(True)
         time_grp = QButtonGroup(self)
         time_grp.addButton(self._time_file)
         time_grp.addButton(self._time_manual)
@@ -159,18 +178,25 @@ class WeatherTab(QWidget):
         time_row.addStretch()
         ab_layout.addLayout(time_row)
 
+        # Warning shown only when "From file" is selected but no file is loaded
+        self._no_file_warning = QLabel("No file loaded — load a FIT file to use file time.")
+        self._no_file_warning.setStyleSheet(f"color: {ORANGE}; font-size: 11px;")
+        self._no_file_warning.setVisible(False)  # hidden at startup (Manual is default)
+        ab_layout.addWidget(self._no_file_warning)
+
         dt_row = QHBoxLayout()
+        dt_row.setSpacing(12)
+        dt_spacer = QLabel()
+        dt_spacer.setFixedWidth(90)
+        dt_row.addWidget(dt_spacer)
         self.dt_pick = QDateTimeEdit(QDateTime.currentDateTime())
         self.dt_pick.setDisplayFormat("yyyy-MM-dd  HH:mm")
         self.dt_pick.setCalendarPopup(True)
-        self.dt_pick.setEnabled(False)
+        apply_calendar_style(self.dt_pick.calendarWidget())
+        self.dt_pick.setEnabled(True)   # manual is default, so start enabled
         dt_row.addWidget(self.dt_pick)
         dt_row.addStretch()
         ab_layout.addLayout(dt_row)
-
-        self.api_time_label = QLabel()
-        self.api_time_label.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
-        ab_layout.addWidget(self.api_time_label)
 
         fetch_row = QHBoxLayout()
         self.fetch_btn = QPushButton("Fetch weather")
@@ -185,31 +211,48 @@ class WeatherTab(QWidget):
         self.api_result_box = QPlainTextEdit()
         self.api_result_box.setReadOnly(True)
         self.api_result_box.setPlaceholderText("Weather fetch results will appear here…")
-        self.api_result_box.setFixedHeight(120)
+        self.api_result_box.setFixedHeight(100)
         self.api_result_box.setStyleSheet(
             f"background: {SURFACE}; color: {TEXT}; border: 1px solid {BORDER}; "
             "font-family: Consolas, monospace; font-size: 11px;"
         )
         ab_layout.addWidget(self.api_result_box)
-        layout.addWidget(self.api_box)
-        self.api_box.setVisible(False)
+        layout.addWidget(self.api_widget)
+        # API is the default source, so manual widget starts hidden
+        self.manual_widget.setVisible(False)
+        self.api_widget.setVisible(True)
+
+        # ── Divider ───────────────────────────────────────────────────
+        div = QFrame()
+        div.setFrameShape(QFrame.HLine)
+        div.setStyleSheet(f"color: {BORDER}; background: {BORDER}; max-height: 1px;")
+        layout.addWidget(div)
 
         # ── Wind effect factor ────────────────────────────────────────
-        layout.addWidget(SectionHeader("Wind effect factor",
-            subtitle="Scales the API/manual wind speed to effective ground-level wind. "
-                     "0 = fully sheltered, 1.0 = full wind, 1.5 = funnelled/exposed."))
-        self.s_wef = SliderRow("Wind effect factor", 0.00, 1.50, 0.40, 0.01, 2, "",
-                               label_width=160)
+        wef_row = QHBoxLayout()
+        wef_row.setSpacing(12)
+        wef_lbl = QLabel("Wind effect:")
+        wef_lbl.setStyleSheet(f"color: {TEXT}; font-size: 12px; font-weight: bold;")
+        wef_lbl.setFixedWidth(90)
+        wef_row.addWidget(wef_lbl)
+        self.s_wef = SliderRow(
+            "0 = sheltered · 1.0 = full wind · 1.5 = exposed",
+            0.00, 1.50, 0.40, 0.01, 2, "", label_width=280)
         self.s_wef.valueChanged.connect(self._on_changed)
-        layout.addWidget(self.s_wef)
+        wef_row.addWidget(self.s_wef, 1)
+        layout.addLayout(wef_row)
 
         # ── Applies to ───────────────────────────────────────────────
-        layout.addWidget(SectionHeader("Applies to"))
         applies_row = QHBoxLayout()
+        applies_row.setSpacing(12)
+        applies_lbl = QLabel("Applies to:")
+        applies_lbl.setStyleSheet(f"color: {TEXT}; font-size: 12px; font-weight: bold;")
+        applies_lbl.setFixedWidth(90)
         self.cb_analyse = QCheckBox("Analyse")
         self.cb_plan    = QCheckBox("Plan")
         self.cb_analyse.setChecked(True)
         self.cb_plan.setChecked(True)
+        applies_row.addWidget(applies_lbl)
         applies_row.addWidget(self.cb_analyse)
         applies_row.addWidget(self.cb_plan)
         applies_row.addStretch()
@@ -234,25 +277,20 @@ class WeatherTab(QWidget):
 
     def _on_source_changed(self):
         manual = self._src_manual.isChecked()
-        self.manual_box.setVisible(manual)
-        self.api_box.setVisible(not manual)
+        self.manual_widget.setVisible(manual)
+        self.api_widget.setVisible(not manual)
         self._on_changed()
 
     def _on_time_mode_changed(self):
-        manual_time = self._time_manual.isChecked()
-        self.dt_pick.setEnabled(manual_time)
-        self._update_api_time_label()
-        self._on_changed()
-
-    def _update_api_time_label(self):
-        if self._time_file.isChecked():
-            if self._file_dt is not None:
-                text = f"File start: {self._file_dt.toString('yyyy-MM-dd  HH:mm')}"
-            else:
-                text = "No file loaded yet — load a FIT file to use file time."
-            self.api_time_label.setText(text)
+        file_time = self._time_file.isChecked()
+        if file_time and self._file_dt is not None:
+            self.dt_pick.setDateTime(self._file_dt)
+            self.dt_pick.setEnabled(False)
         else:
-            self.api_time_label.setText("")
+            self.dt_pick.setEnabled(not file_time)
+        # Warning is only relevant when "From file" is selected but no file loaded
+        self._no_file_warning.setVisible(file_time and self._file_dt is None)
+        self._on_changed()
 
     def _on_changed(self, *_):
         if self._building:
@@ -275,8 +313,7 @@ class WeatherTab(QWidget):
         """Called by the app shell after a weather fetch completes or fails."""
         self.fetch_btn.setEnabled(True)
         if error:
-            self.fetch_status.setText(error)
-            self.fetch_status.setStyleSheet(_ERR_STYLE)
+            self.fetch_status.setText("")
             self._last_fetch_result = None
             self.api_result_box.setPlainText(f"Error: {error}")
             return
@@ -286,13 +323,12 @@ class WeatherTab(QWidget):
         available = result.get("available", True)
 
         if not available or not samples:
-            self.fetch_status.setText(_NO_DATA_LABEL)
-            self.fetch_status.setStyleSheet(_STALE_STYLE)
+            self.fetch_status.setText("")
             self.api_result_box.setPlainText(_NO_DATA_LABEL)
             self.weatherChanged.emit(self.get_config())
             return
 
-        self.fetch_status.setText(f"✓ {len(samples)} samples fetched")
+        self.fetch_status.setText(f"✓ {len(samples)} sample(s)")
         self.fetch_status.setStyleSheet(_OK_STYLE)
 
         # Build a human-readable summary of first/avg/last samples.

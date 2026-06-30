@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from theme import ACCENT, BG, GREEN, MUTED, ORANGE, RED_COL, SURFACE, TEXT
+from theme import ACCENT, BG, GREEN, MUTED, ORANGE, RED_COL, SURFACE, TEXT, apply_calendar_style
 from planui.widgets import fmt_time
 from planui.widgets import MetricCard, SliderRow
 from weather_plan import MODE_FORECAST, MODE_HISTORY
@@ -124,7 +124,7 @@ class AdvancedInputPanel(QWidget):
         self.dt_start.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.dt_start.setDateTime(self._next_top_of_hour())
         self.dt_start.dateTimeChanged.connect(self._on_weather_input_changed)
-        self._style_calendar_popup()
+        apply_calendar_style(self.dt_start.calendarWidget())
 
         self.chk_use_fit_ts = QCheckBox("Use ride timestamps (from FIT)")
         self.chk_use_fit_ts.setToolTip(
@@ -170,61 +170,6 @@ class AdvancedInputPanel(QWidget):
         self.chk_use_fit_ts.setEnabled(False)
         self._sync_weather_widgets()
         layout.addWidget(box)
-
-    def _style_calendar_popup(self):
-        """Apply a flat, dark, theme-matched look to the calendar popup."""
-        cal = self.dt_start.calendarWidget()
-        if cal is None:
-            return
-        cal.setGridVisible(False)
-        cal.setNavigationBarVisible(True)
-        cal.setStyleSheet(
-            f"""
-            QCalendarWidget QWidget {{
-                background-color: {BG};
-                color: {TEXT};
-            }}
-            QCalendarWidget QToolButton {{
-                background-color: {SURFACE};
-                color: {TEXT};
-                border: none;
-                border-radius: 4px;
-                padding: 4px 10px;
-                margin: 2px;
-                font-size: 12px;
-            }}
-            QCalendarWidget QToolButton:hover {{
-                background-color: {ACCENT};
-                color: #ffffff;
-            }}
-            QCalendarWidget QToolButton::menu-indicator {{
-                image: none;
-            }}
-            QCalendarWidget QMenu {{
-                background-color: {SURFACE};
-                color: {TEXT};
-            }}
-            QCalendarWidget QSpinBox {{
-                background-color: {SURFACE};
-                color: {TEXT};
-                border: none;
-            }}
-            QCalendarWidget QWidget#qt_calendar_navigationbar {{
-                background-color: {SURFACE};
-            }}
-            QCalendarWidget QAbstractItemView {{
-                background-color: {BG};
-                color: {TEXT};
-                selection-background-color: {ACCENT};
-                selection-color: #ffffff;
-                outline: 0;
-                gridline-color: transparent;
-            }}
-            QCalendarWidget QAbstractItemView:disabled {{
-                color: {MUTED};
-            }}
-            """
-        )
 
     @staticmethod
     def _next_top_of_hour():
@@ -386,9 +331,20 @@ class AdvancedResultsPanel(QWidget):
         button_layout.addWidget(self.lbl_export_status, 1)
         layout.addLayout(button_layout)
 
-        metrics_row = QHBoxLayout()
-        metrics_row.setSpacing(12)
+        # ── Row 1: time cards ─────────────────────────────────────────────
+        time_row = QHBoxLayout()
+        time_row.setSpacing(12)
         self.card_time = MetricCard("Estimated time", "-", accent=True)
+        self.card_flat_time = MetricCard("Flat power time", "-")
+        self.card_time_saved = MetricCard("Time saved", "-")
+        self.card_weather_time = MetricCard("Weather time", "-")
+        for c in [self.card_time, self.card_flat_time, self.card_time_saved, self.card_weather_time]:
+            time_row.addWidget(c, 1)
+        layout.addLayout(time_row)
+
+        # ── Row 2: performance cards ───────────────────────────────────────
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(12)
         self.card_speed = MetricCard("Avg speed", "-")
         self.card_np = MetricCard("NP", "-")
         self.card_avg_power = MetricCard("Avg power", "-")
@@ -396,20 +352,10 @@ class AdvancedResultsPanel(QWidget):
         self.card_wkg = MetricCard("W/kg", "-")
         self.card_min_reserve = MetricCard("Min reserve", "-")
         self.card_fatigue = MetricCard("Final fatigue", "-")
-        self.card_weather_time = MetricCard("Weather time", "-")
-        for c in [
-            self.card_time,
-            self.card_speed,
-            self.card_np,
-            self.card_avg_power,
-            self.card_if,
-            self.card_wkg,
-            self.card_min_reserve,
-            self.card_fatigue,
-            self.card_weather_time,
-        ]:
-            metrics_row.addWidget(c)
-        layout.addLayout(metrics_row)
+        for c in [self.card_speed, self.card_np, self.card_avg_power, self.card_if,
+                  self.card_wkg, self.card_min_reserve, self.card_fatigue]:
+            stats_row.addWidget(c, 1)
+        layout.addLayout(stats_row)
 
         self.section_box = QGroupBox("Advanced power sections")
         self.section_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -487,6 +433,8 @@ class AdvancedResultsPanel(QWidget):
 
     def _set_results_visible(self, visible):
         self.card_time.setVisible(visible)
+        self.card_flat_time.setVisible(visible)
+        self.card_time_saved.setVisible(visible)
         self.card_speed.setVisible(visible)
         self.card_np.setVisible(visible)
         self.card_avg_power.setVisible(visible)
@@ -553,6 +501,21 @@ class AdvancedResultsPanel(QWidget):
         self._set_results_visible(True)
         self.card_time.update_value(fmt_time(sim_result['time_h'], with_seconds=True), ACCENT)
         self.card_speed.update_value(f"{sim_result['avg_speed']:.1f} km/h")
+
+        flat_time_h = sim_result.get('flat_time_h')
+        if flat_time_h and flat_time_h > 0:
+            self.card_flat_time.update_value(fmt_time(flat_time_h, with_seconds=True))
+            saved_s = (flat_time_h - sim_result['time_h']) * 3600
+            if abs(saved_s) < 1:
+                self.card_time_saved.update_value("± 0s", TEXT)
+            else:
+                sign = "+" if saved_s >= 0 else "-"
+                color = GREEN if saved_s > 1 else RED_COL
+                self.card_time_saved.update_value(
+                    f"{sign}{fmt_time(abs(saved_s) / 3600, with_seconds=True)}", color)
+        else:
+            self.card_flat_time.update_value("-")
+            self.card_time_saved.update_value("-")
         self.card_np.update_value(f"{sim_result['np_power']:.0f} W")
         self.card_avg_power.update_value(f"{sim_result['avg_power']:.0f} W")
 

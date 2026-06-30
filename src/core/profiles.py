@@ -33,6 +33,9 @@ class Rider:
     climbing_cda: float = 0.32         # m^2 (used by Plan on climbs)
     ftp: float = 250.0                 # W
     max_power: float = 400.0           # W (used by Plan durability model)
+    reserve_kj: float = 20.0           # kJ  (W' reserve capacity)
+    min_reserve_kj: float = 15.0       # kJ  (W' min reserve warning)
+    reserve_decay: float = 0.20        # fraction (W' decay per kJ accumulated)
     notes: str = ""
 
     @property
@@ -62,26 +65,10 @@ class Rider:
             "eff": float(self.efficiency),
             "ftp": float(self.ftp),
             "max_power": float(self.max_power),
+            "reserve_kj": float(self.reserve_kj),
+            "min_reserve_kj": float(self.min_reserve_kj),
+            "reserve_decay": float(self.reserve_decay),
         }
-
-
-# Seed riders from the measured CdA data documented in cda_analyzer/config.py.
-_SEED_RIDERS = [
-    Rider(name="Jorik", rider_mass=75.0, bike_mass=10.0, rolling_resistance=0.005,
-          cda=0.290, climbing_cda=0.31, ftp=309.0, max_power=520.0,
-          notes="Seeded from measured rides (Eeklo/Damme/Lievegem)."),
-    Rider(name="Sam", rider_mass=68.0, bike_mass=9.0, rolling_resistance=0.0035,
-          cda=0.2515, climbing_cda=0.27, ftp=280.0, max_power=450.0,
-          notes="Seeded from Eeklo 2025 analysis."),
-    Rider(name="Xiano", rider_mass=68.0, bike_mass=9.0, rolling_resistance=0.0035,
-          cda=0.2241, climbing_cda=0.24, ftp=280.0, max_power=450.0,
-          notes="Seeded from Eeklo 2025 analysis."),
-    Rider(name="Lars", rider_mass=77.0, bike_mass=10.0, rolling_resistance=0.0038,
-          cda=0.317, climbing_cda=0.34, ftp=300.0, max_power=500.0,
-          notes="Seeded from Kapelle/Damme/Lievegem analysis."),
-]
-
-
 class ProfileStore:
     """Loads, saves and manages rider profiles with a selected-rider pointer."""
 
@@ -101,12 +88,7 @@ class ProfileStore:
                 self.selected = data.get("selected")
             except Exception:
                 _logger.exception("Failed to read %s; reseeding profiles", self.path)
-                self._seed()
-        else:
-            self._seed()
 
-        if not self.riders:
-            self._seed()
         if self.selected not in self.names():
             self.selected = self.names()[0]
         return self
@@ -122,11 +104,6 @@ class ProfileStore:
                 json.dump(payload, fh, indent=2)
         except Exception:
             _logger.exception("Failed to save profiles to %s", self.path)
-
-    def _seed(self):
-        self.riders = [Rider(**asdict(r)) for r in _SEED_RIDERS]
-        self.selected = self.riders[0].name
-        self.save()
 
     # ---- access --------------------------------------------------------
     def names(self):
@@ -171,8 +148,6 @@ class ProfileStore:
 
     def remove(self, name):
         self.riders = [r for r in self.riders if r.name != name]
-        if not self.riders:
-            self._seed()
         if self.selected not in self.names():
             self.selected = self.names()[0]
         self.save()
